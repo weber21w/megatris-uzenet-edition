@@ -1,0 +1,14 @@
+<?xml version="1.0" ?>
+<gfx-xform version="1">
+
+	<!--<input file="c:/uze/tetris-tiles.raw" type="raw" width="240" height="368" tile-width="6" tile-height="8" />-->
+
+	<input file="../data/font.png" type="png" tile-width="6" tile-height="8" />
+
+	<output file="../data/font.inc">
+
+		<tiles var-name="font"/>	
+
+	</output>
+
+</gfx-xform>
