@@ -135,7 +135,7 @@ void StartSongNo(u8 songNo){
 
 
 void OptionsMenu(u8 p){
-while(!Uzenet_Sync(0)){WaitVsync(1);}if(uzenet_error){return;}
+if(!Uzenet_Sync(0)){return;}
 
 	u8 c,dx,option=0;
 	dx = fields[p].left+1;
@@ -659,7 +659,7 @@ void runStateMachine(){
 			break;
 		case 4: //processing garbage
 
-while(!Uzenet_Sync(0)){WaitVsync(1);}if(uzenet_error){return;}
+if(!Uzenet_Sync(0)){return;}
 
 			if(processGarbage()==1){
 				fields[f].subState=0;
@@ -854,7 +854,7 @@ u8 moveBlock(s8 x,s8 y){
 
 
 s8 randomize(void){
-while(!Uzenet_Sync(0)){WaitVsync(1);}if(uzenet_error){return;}
+
 	return (s8)(GetPrngNumber(0) % 7);
 
 }
@@ -866,7 +866,7 @@ void issueNewBlock(){
 	s16 next=0;
 	
 	if(fields[f].bagPos==7){ //time to fill a new bag 
-				
+if(!Uzenet_Sync(0)){return;}				
 		b1=randomize();
 		do{b2=randomize();}while (b2==b1);
 		do{b3=randomize();}while (b3==b2);

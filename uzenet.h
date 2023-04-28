@@ -121,7 +121,7 @@ const char UN_STR_ERROR[] PROGMEM = "ERROR";
 
 #define UN_ERROR_TRANSIENT		1//a(possibly) temporary error, which might have been caused by temporary network conditions
 #define UN_ERROR_CONNECT_FAILED	2//possibly a transient error
-#define UN_ERROR_SERVER_TIMEOUT	4
+#define UN_ERROR_SERVER_TIMEOUT	4//possibly a transient error
 #define UN_ERROR_CRITICAL		128//an error that wont be fixed by resetting and trying again
 
 #define UN_MATCH_RSVP_DETECTED 2//a pre-arranged match was detected, bypass the requirement for the user to manuall select UZENET option
@@ -210,7 +210,7 @@ const char UN_STR_ERROR[] PROGMEM = "ERROR";
 
 //#define UN_MATCH_MAKING_STYLE	1//override the default simple "join/host any game without password" behavior
 
-
+#define UN_MAX_SYNC_WAIT 180
 
 u8 local_player;
 volatile u16 uzenet_state;
@@ -274,7 +274,16 @@ void Uzenet_SetStep(u8 s){
 
 u8 Uzenet_Sync(u8 s){
 	uzenet_sync = s;
-	return (uzenet_remote_tick != uzenet_tick);
+	if(uzenet_state < UN_STEP_PLAYING)
+		return 1;
+	u8 wait_time = 0;
+	while(uzenet_remote_tick != uzenet_tick && wait_time < UN_MAX_SYNC_WAIT){//volatile
+		WaitVsync(1);
+		if(uzenet_error)//volatile
+			return 0;
+		wait_time++;
+	}
+	return (wait_time < UN_MAX_SYNC_WAIT);
 }
 
 u8 Uzenet_GameError(){
