@@ -43,9 +43,37 @@ void DoIntro(){//draw logo inline(lets Uzenet start working sooner...)
 		r = 0b1010110010011101; //sometimes it fails?
 	GetPrngNumber(r); //seed our random numbers(will be overrided by server for Uzenet games)
 }
+/*
+u8 VirtualKBMode;
+u16 VirtualKBPad;
+u8 VirtualKBPadLastCode;
+void KeyboardUpdate(){
+
+
+	u8 key=KeyboardGetKey();
+
+	if(key != 0xF0){//key up/break code?
+		
+	}
+	VirtualKBPadLastCode=key;
+
+	
+	if(VirtualKBPadLastCode == 0xE0)
+
+
+//	KeyboardPoll();//checks for new keys
+
+	//process the keyboard
+//	if(KeyboardHasKey()){
+//		u8 key=KeyboardGetKey(true);
+		//terminal_ProcessKey(key);
+//	}
+}
+*/
 
 
 int main(){
+//	SetUserPreVsyncCallback(&KeyboardUpdate);
 	SetUserPostVsyncCallback(&Uzenet_Update);//this will handle the majority of Uzenet functionality behind the scenes
 	DoIntro();//inline version of kernel Logo
 	SetTileTable(tetrisTiles);
@@ -73,56 +101,89 @@ int main(){
 				break;
 		}
 		while(ReadJoypad(0)&BTN_START);
-	} 
+	}
 
+#if CPU_PLAYER > 0
+	//SetRenderingParameters(110U, 32U);//(FIRST_RENDER_LINE+10,FRAME_LINES-10);
+#endif
 	for(u8 i=0;i<2;i++){
 		fields[i].maxAutoRepeatDelay = DEF_AUTO_REPEAT_DELAY;//players can customize this in game for Uzenet
 		fields[i].maxInterRepeatDelay = DEF_INTER_REPEAT_DELAY;
 		fields[i].startLevel = DEF_START_LEVEL;
 	}
 
+	u8 r;
 GAME_TOP:
-	if(MainMenu()){
-		do{
-			do{
-				LoadMap();
-				initFields();	
+	r = MainMenu();
 
-				SetTile(14,25,8);
-				SetTile(15,25,20);
-				PrintHexByte(16,25,0);
+	if(r == 0)//single player
+		vsMode = 0;
+	else//2 player(local) or Uzenet
+		vsMode = 1;
+	if(r == 2){//Uzenet game
+		if(!ConnectMenu())//failed to connect or match?
+			goto GAME_TOP;
+	}
 
-				SetTile(22,25,8);
-				SetTile(23,25,20);
-				PrintHexByte(24,25,0);
+	while(1){
+		if(IsSongPlaying())
+			ResumeSong();
+		else
+			StartSongNo(songNo);
+GAME_NEW_MATCH:
+		while(1){//new match
+			LoadMap();
+			initFields();	
 
-				if(uzenet_step < UN_STEP_PLAYING) //if uzenet, we already started the song to alert the players of connection
-					StartSongNo(songNo);
+			SetTile(14,25,8);
+			SetTile(15,25,20);
+			PrintHexByte(16,25,0);
 
-				fields[0].currentState=0;
-			 	fields[1].currentState=0;
-				restart=0;
+			SetTile(22,25,8);
+			SetTile(23,25,20);
+			PrintHexByte(24,25,0);
 
-				while(!fields[0].gameOver && !fields[1].gameOver){	
-					WaitVsync(1); //syncronize gameplay on vsync (60 hz)
-					if(uzenet_error)
+		//	if(uzenet_step < UN_STEP_PLAYING) //if uzenet, we already started the song to alert the players of connection
+		//		StartSongNo(songNo);
+
+			fields[0].currentState=0;
+			fields[1].currentState=0;
+
+			while(!fields[0].gameOver && !fields[1].gameOver){//on going match
+				WaitVsync(1); //syncronize gameplay on vsync (60 hz)
+				if(uzenet_error)
+					break;
+
+				r = 0;
+				for(u8 i=0;i<2;i++){
+					fields[i].lastButtons=fields[i].currButtons;
+					fields[i].currButtons=ReadJoypad(i);
+
+					if(i == 1 && !vsMode)
 						break;
-
-					f=0;
-					runStateMachine();
-					processAnimations(0);
-
-					if(vsMode){
-						f=1;
-						runStateMachine();
-						processAnimations(1);
+					runStateMachine(i);
+					processAnimations(i);
+					if((fields[i].currButtons&BTN_START) && !(fields[i].lastButtons&BTN_START)){
+						r = OptionsMenu();
+						if(r == 0)//resume
+							break;
+						FadeOut(1,1);
+						FadeIn(1,0);
+						if(r == 1)//restart
+							goto GAME_NEW_MATCH;
+						if(r == 2)
+							goto GAME_TOP;
+						break;
 					}
 				}
-			}while(restart);
-		}while(doGameContinue());
+				
+			}//on going match
+		}//new match
 	}
+
 	goto GAME_TOP;
 }
+
 
 
 void StartSongNo(u8 songNo){
@@ -134,134 +195,208 @@ void StartSongNo(u8 songNo){
 }
 
 
-void OptionsMenu(u8 p){
-if(!Uzenet_Sync(0)){return;}
 
-	u8 c,dx,option=0;
-	dx = fields[p].left+1;
-	fill(fields[p].left,fields[p].top+2,FIELD_WIDTH,FIELD_HEIGHT-2,0);
-	Print(dx,14,PSTR("RESUME"));
-	Print(dx,15,PSTR("RESTART"));
-	Print(dx,16,PSTR("QUIT"));
-	Print(dx,18,PSTR("MUSIC:"));
-	Print(dx,19,PSTR("GHOST:"));
+u8 OptionsMenu(){
+//if(!Uzenet_Sync(0)){return;}
 
-	goto FIRST_DRAW; //avoid taking too long before field is overwritten...
+	u8 dx;
+	u8 option[2]={0,0};
+	u8 breakout = 0;
+
+	for(u8 i=0;i<2;i++){
+		if(i == 1 && ! vsMode)
+			break;
+		dx = fields[i].left+1;
+		fill(fields[i].left,fields[i].top+2,FIELD_WIDTH,FIELD_HEIGHT-2,0);
+		Print(dx,14,PSTR("RESUME"));
+		Print(dx,15,PSTR("RESTART"));
+		Print(dx,16,PSTR("QUIT"));
+		Print(dx,18,PSTR("MUSIC:"));
+		Print(dx,19,PSTR("GHOST:"));
+	}
+
+//	goto FIRST_DRAW; //avoid taking too long before field is overwritten...
 
 	while(1){
 		u8 menuSfx = 0;
 		WaitVsync(1);
-		c=ReadJoypad(p);
-		
-		if(c&(BTN_START|BTN_A|BTN_B)){
-			
-			while(ReadJoypad(p)!=0); //wait for key release
-			
-			if(option==0){
-				if(IsSongPlaying()){
-					StopSong();
-				}else{
-					StartSongNo(songNo);
-				}
-			}else if(option==4){
-				StopSong();
+		for(u8 i=0;i<2;i++){
+			if(i == 1 && !vsMode)
 				break;
-			}
-		}
 
-		if(c&BTN_LEFT && option<5)
-			menuSfx=1;
-
-		if(c&BTN_LEFT){
-			if(option==0 && songNo>0){
-				songNo--;
-			}else if(option==1){
-				fields[p].noGhostBlock=!fields[p].noGhostBlock;
-			}else if(option==2 && fields[p].startLevel>0){
-				fields[p].startLevel--;
-			}
-
-			while(ReadJoypad(p)!=0); //wait for key release	
-		}
-		if(c&BTN_RIGHT){
-			if(option==0 && songNo<3){
-				songNo++;
-			}else if(option==1){
-				fields[0].noGhostBlock=!fields[0].noGhostBlock;
-			}else if(option==2 && fields[p].startLevel<30){
-				fields[p].startLevel++;
-			}
-
-			while(ReadJoypad(p)!=0); //wait for key release	
-		}
-
-		if(c&BTN_UP || c&BTN_DOWN || c&BTN_SELECT){
-			menuSfx=1;
-
-			if(c&BTN_UP){
-				if(option==0){
-					option=5;
-				}else{
-					option--;
-				}
-
-			}else if(c&BTN_DOWN || c&BTN_SELECT){
-				if(option==5){
-					option=0;
-				}else{
-					option++;
+			fields[i].lastButtons=fields[i].currButtons;
+			fields[i].currButtons=ReadJoypad(i);
+		
+			if((fields[i].currButtons&(BTN_START|BTN_A|BTN_B)) && !(fields[i].lastButtons&(BTN_START|BTN_A|BTN_B))){
+			
+				if(option[i]==0){//resume
+					breakout=1;
+					break;
+				}else if(option[i]==1){//restart
+					breakout=2;
+					StopSong();
+					break;
+				}else if(option[i]==2){//quit
+					breakout=3;
+					break;
+				}else if(option[i]==3){//song
+					if(IsSongPlaying()){
+						StopSong();
+					}else{
+						StartSongNo(songNo);
+					}
 				}
 			}
 
-			while(ReadJoypad(p)!=0); //wait for key release
-		}
+			if((fields[i].currButtons&BTN_LEFT) && !(fields[i].lastButtons&BTN_LEFT) && option[i]<5)
+				menuSfx=1;
 
-		if(menuSfx){
-			menuSfx = 0;
-			TriggerFx(1,0x90,1);
+			if((fields[i].currButtons&BTN_LEFT) && !(fields[i].lastButtons&BTN_LEFT)){
+				if(option[i]==3 && songNo>0){
+					songNo--;
+				}else if(option[i]==4){
+					fields[i].noGhostBlock=!fields[i].noGhostBlock;
+				}else if(option[i]==5 && fields[i].startLevel>0){
+					fields[i].startLevel--;
+				}else if(option[i]==6 && fields[i].maxAutoRepeatDelay > MIN_AUTO_REPEAT_DELAY){
+					fields[i].maxAutoRepeatDelay--;
+				}else if(option[i]==7 && fields[i].maxInterRepeatDelay > MIN_INTER_REPEAT_DELAY){
+					fields[i].maxInterRepeatDelay--;
+				}	
+			}
+			if((fields[i].currButtons&BTN_RIGHT)&&!(fields[i].lastButtons&BTN_RIGHT)){
+				if(option[i]==3 && songNo<3){
+					songNo++;
+				}else if(option[i]==4){
+					fields[i].noGhostBlock=!fields[i].noGhostBlock;
+				}else if(option[i]==5 && fields[i].startLevel<30){
+					fields[i].startLevel++;
+					if(fields[i].level < fields[i].startLevel)
+						fields[i].level++;
+				}else if(option[i]==6 && fields[i].maxAutoRepeatDelay < MAX_AUTO_REPEAT_DELAY){
+					fields[i].maxAutoRepeatDelay++;
+				}else if(option[i]==7 && fields[i].maxInterRepeatDelay < MAX_INTER_REPEAT_DELAY){
+					fields[i].maxInterRepeatDelay++;
+				}	
+			}
+
+			if((fields[i].currButtons&(BTN_UP|BTN_DOWN|BTN_SELECT)) && !(fields[i].lastButtons&(BTN_UP|BTN_DOWN|BTN_SELECT))){
+				menuSfx=1;
+
+				if(fields[i].currButtons&BTN_UP){
+					if(option[i]==0){
+						option[i]=7;
+					}else{
+						option[i]--;
+					}
+
+				}else if(fields[i].currButtons&(BTN_DOWN|BTN_SELECT)){
+					if(option[i]==7){
+						option[i]=0;
+					}else{
+						option[i]++;
+					}
+				}
+			}
+
+			if(menuSfx){
+				menuSfx = 0;
+				TriggerFx(1,0x90,1);
+			}
+
 		}
+		if(breakout)
+			break;
 FIRST_DRAW:
-		PrintHexByte(dx+6,18,songNo);
-		Print(dx+6,19,(fields[p].noGhostBlock) ? PSTR("OFF"):PSTR("ON "));
-		PrintByte(dx+7,20,fields[p].startLevel,1);
-		Print(dx,20,PSTR("LEVEL:"));
-		PrintByte(dx+7,21,fields[p].maxAutoRepeatDelay,1);
-		Print(dx,21,PSTR("AUTOR:"));
-		PrintByte(dx+7,22,fields[p].maxInterRepeatDelay,1);
-		Print(dx,22,PSTR("INTER:"));
+		for(u8 i=0;i<2;i++){
+			if(i == 1 && !vsMode)
+				continue;
+			dx = fields[i].left+1;
+			PrintHexByte(dx+6,18,songNo);
+			Print(dx+6,19,(fields[i].noGhostBlock) ? PSTR("OFF"):PSTR("ON "));
+			PrintByte(dx+7,20,fields[i].startLevel,1);
+			Print(dx,20,PSTR("LEVEL:"));
+			PrintByte(dx+7,21,fields[i].maxAutoRepeatDelay,1);
+			Print(dx,21,PSTR("AUTOR:"));
+			PrintByte(dx+7,22,fields[i].maxInterRepeatDelay,1);
+			Print(dx,22,PSTR("INTER:"));
 
-		for(u8 i=14;i<14+8;i++) //erase old cursor
-			SetTile(dx-1,i,0);
-		SetTile(dx-1,14+option,CURSOR_TILE);	
+			for(u8 i=14;i<14+9;i++) //erase old cursor
+				SetTile(dx-1,i,0);
+			SetTile(dx-1,14+option[i]+(option[i]>2?1:0),CURSOR_TILE);
+		}	
 	}
-	restore(fields[p].left,fields[p].top+2,FIELD_WIDTH,FIELD_HEIGHT-2);
-	for(u8 cy=2;cy<FIELD_HEIGHT;cy++){
-		for(u8 cx=0;cx<FIELD_WIDTH;cx++){
-			if(fields[p].surface[cy][cx]!=0){
-				SetTile(fields[p].left+cx,fields[p].top+cy,fields[p].surface[cy][cx]);
-			}
-		}				
+
+	for(u8 i=0;i<2;i++){
+		if(i == 1 && !vsMode)
+			break;
+		restore(fields[i].left,fields[i].top+2,FIELD_WIDTH,FIELD_HEIGHT-2);
+		for(u8 cy=2;cy<FIELD_HEIGHT;cy++){
+			for(u8 cx=0;cx<FIELD_WIDTH;cx++){
+				if(fields[i].surface[cy][cx]!=0){
+					SetTile(fields[i].left+cx,fields[i].top+cy,fields[i].surface[cy][cx]);
+				}
+			}				
+		}
+		updateGhostPiece(i,0);
 	}
+//sync?
+	return breakout-1;
 }
 
 
-int UzenetConnect(){
+int ConnectMenu(){
 
 	ClearVram();
 
 	u8 error = 0;
 	u8 connected = 0;
 	u16 timer = 0;
+	u8 anim0 = 0;
+	u8 anim1 = 0;
+	u8 anim2 = 0;
+	u8 anim3 = 0;
 	while(1){
 
 		WaitVsync(1);
+		ClearVram();
 		DrawMap(3,3,map_title);
 
 		if(connected || error)//waiting or error is indefinite
 			timer = 0;
-		else
+		else{
 			timer++;
+			uzenet_state |= UN_FIND_OPPONENT;
+		}
 //if(timer == 30)uzenet_step=UN_CONNECT_SERVER;
+if(anim0 > 3){
+	anim0 = 0;
+	anim1++;
+	anim2 = anim1>>1;
+	anim3 = anim2>>1;
+}
+
+if(1){
+//if(anim >= sizeof(sin_table)*2)
+//	anim = 0;
+		for(u8 i=0;i<SCREEN_TILES_H;i++){
+		//	SetTile(10+i,10+pgm_read_byte(&sin_table[(anim+i)%sizeof(sin_table)]),1);
+	//		SetTile(10+i,SCREEN_TILES_V-7-pgm_read_byte(&sin_table[(anim+i)%sizeof(sin_table)]),2);
+		//	SetTile(10+i,SCREEN_TILES_V-7-pgm_read_byte(&sin_table[(anim+i)%sizeof(sin_table)]),((anim+i)%4)+1);
+			//SetTile(10+i,SCREEN_TILES_V-7-pgm_read_byte(&sin_table[((anim/2)+i)%sizeof(sin_table)]),3);
+		//	SetTile(10+i,SCREEN_TILES_V-7-pgm_read_byte(&sin_table[(anim+i)%sizeof(sin_table)])/2,3);
+		}
+}
+//drawTetramino(10,pgm_read_byte(&sin_table[(anim%sizeof(sin_table))]),0,(anim>>3)%3,0,0,0);
+//drawTetramino(15,pgm_read_byte(&sin_table[(anim%sizeof(sin_table))]),1,(anim>>4)%3,0,0,0);
+//drawTetramino(20,pgm_read_byte(&sin_table[(anim%sizeof(sin_table))]),2,(anim>>3)%3,0,0,0);
+//drawTetramino(10,SCREEN_TILES_V-4-pgm_read_byte(&sin_table[(anim%sizeof(sin_table))]),3,(anim>>3)%3,0,0,0);
+//drawTetramino(15,SCREEN_TILES_V-4-pgm_read_byte(&sin_table[(anim%sizeof(sin_table))]),4,(anim>>4)%3,0,0,0);
+//drawTetramino(20,SCREEN_TILES_V-4-pgm_read_byte(&sin_table[(anim%sizeof(sin_table))]),5,(anim>>3)%3,0,0,0);
+drawTetramino(pgm_read_byte(&sin_tablex[(anim2%sizeof(sin_tablex))]),pgm_read_byte(&sin_tabley[(anim2%sizeof(sin_tabley))]),((anim3+0)>>3)%5,(anim3>>1)%3,0,0,0);
+drawTetramino(pgm_read_byte(&sin_tablex[(anim1%sizeof(sin_tablex))]),pgm_read_byte(&sin_tabley[(anim3%sizeof(sin_tabley))]),((anim3+1)>>3)%5,(anim3>>1)%3,0,0,0);
+drawTetramino(pgm_read_byte(&sin_tablex[(anim3%sizeof(sin_tablex))]),pgm_read_byte(&sin_tabley[(anim1%sizeof(sin_tabley))]),((anim3+2)>>3)%5,(anim3>>1)%3,0,0,0);
+u16 c;
 		if(!error){
 			if(!connected){
 				Print(9,16,PSTR("CONNECTING TO UZENET...."));
@@ -270,12 +405,11 @@ int UzenetConnect(){
 				Print(4,19,PSTR("PRESS A FOR BOT MATCH"));
 			}
 		}else{//some error happened
+			Print(4,14,PSTR("ERROR 0X"));
+			PrintHexByte(12,14,uzenet_error);
 			Print(4,16,PSTR("NETWORK ERROR OR MODULE FAILURE"));
 			Print(4,18,PSTR("RUN SETUP TOOL IF THIS PERSISTS"));
-		}
-		Print(error?4:11,20,PSTR("PRESS B TO CANCEL       "));
-
-		u16 c = ReadJoypad(0);
+		c = ReadJoypad(0);
 		if(c & BTN_B){
 			while(ReadJoypad(0) != 0); //wait for key release
 			TriggerFx(5,0xff,1);
@@ -283,6 +417,9 @@ int UzenetConnect(){
 			FadeIn(1,0);
 			return 0;//go back to main menu
 		}
+		}
+		Print(error?4:11,20,PSTR("PRESS B TO CANCEL       "));
+
 
 		if(c & BTN_A)
 			UartSendChar('C');//since we are in simple 2P matchmaking mode, this is all we need to do and the server will make a bot join
@@ -290,12 +427,12 @@ int UzenetConnect(){
 		if(error)
 			continue;
 
-		for(uint8_t j=29;j<35;j++){//animate "progress bar"
+//		for(uint8_t j=29;j<35;j++){//animate "progress bar"
 
-			if(((timer&31)/8) > j-29)
-				continue;
-			SetTile(j,16,0);
-		}
+//			if(((timer&31)/8) > j-29)
+//				continue;
+//			SetTile(j,16,0);
+//		}
 
 		if(uzenet_error || timer == ((60*4)-1)){ //something timed out, indicating an unrecoverable error
 			error = 1;
@@ -383,119 +520,59 @@ if(ready1)
 }
 
 
-u8 MainMenu(){ //will never get here during an Uzenet game
+
+u8 MainMenu(){
 
 	u8 option = 0;
-	u16 lastButtons,currButtons=0;
 
 	while(1){
 		WaitVsync(1);
-		GetPrngNumber(0);
 		ClearVram();
 		DrawMap(3,3,map_title);
-		Print(15,15,PSTR("1 PLAYER"));
-		Print(15,16,PSTR("2 PLAYER"));
-		Print(15,17,PSTR("UZENET"));
 
-	
-		PrintChar(10,22,92);
-		Print(9,22,PSTR("2008-2023 ALEC BOURQUE"));
-		Print(7,23,PSTR("LICENSED UNDER GNU GPL V3"));
+//		if(uzenet_step >= UN_STEP_CHECK_READY)//Uzenet backend must have found an RSVP match(setup before the game was booted?)
+//			return 3;
+
+		Print(15,16,PSTR("[1]SINGLE"));
+		Print(15,17,PSTR("[2]VERSUS"));
+		Print(15,18,PSTR("[3]UZENET"));
+
+		Print(11,21,PSTR("KEYBOARD SUPPORTED"));
+		Print(11,23,PSTR("\\2008 ALEC BOURQUE"));
+		Print(7,24,PSTR("LICENSED UNDER GNU GPL V3"));
 		Print(9,25,PSTR("HTTPS://WWW.UZEBOX.ORG"));
 
-		lastButtons=currButtons;
-		currButtons=ReadJoypad(0);
+		for(u8 i=0;i<2;i++){
 
-		if((currButtons&(BTN_A|BTN_START)) && !(lastButtons&(BTN_A|BTN_START))){
-			
-			if(option==0){
-				vsMode=0;
-				break;
-			}else if(option==1){
-				vsMode=1;
-				break;
-			}else{
-				if(!(uzenet_error & UN_ERROR_CRITICAL)){
-					if(UzenetConnect()){//if we connect, we wont return to the main menu until we disconnect
-						vsMode=1;
-						break;
-					}
-					return 0;
-				}else
-					TriggerFx(6,0xff,1);
+			fields[i].lastButtons=fields[i].currButtons;
+			fields[i].currButtons=ReadJoypad(i);
+
+			if((fields[i].currButtons&(BTN_A|BTN_START)) && !(fields[i].lastButtons&(BTN_A|BTN_START))){
+				FadeOut(1,1);
+				FadeIn(2,0);
+				return option;
 			}
-		}
 
-		if((currButtons&(BTN_UP|BTN_DOWN|BTN_SELECT)) && !(lastButtons&(BTN_UP|BTN_DOWN|BTN_SELECT))){
+			if((fields[i].currButtons&(BTN_UP|BTN_DOWN|BTN_SELECT)) && !(fields[i].lastButtons&(BTN_UP|BTN_DOWN|BTN_SELECT))){
 
-			TriggerFx(1,0x90,1);
+				TriggerFx(1,0x90,1);
 
-			if((currButtons&BTN_UP)){
-				if(--option>2) //rollover
-					option=2;
+				if((fields[i].currButtons&BTN_UP)){
+					if(--option>2) //rollover
+						option=2;
 
-			}else{ //BTN_DOWN|BTN_SELECT
-				if(++option>2)
-					option=0;
-			}
-		}
-		SetTile(14,15+option,CURSOR_TILE); //draw cursor
-	}
-	FadeOut(1,1);
-	FadeIn(2,0);
-	return 1;
-}
-
-
-u8 doGameContinue(void){
-	u8 option=0,cx=fields[0].left+2,cy=15;
-	u16 c;
-
-	restore(fields[0].left,fields[0].top+2,FIELD_WIDTH,FIELD_HEIGHT-2);
-	restore(fields[1].left,fields[1].top+2,FIELD_WIDTH,FIELD_HEIGHT-2);
-
-	Print(cx+1,cy,PSTR("PLAY"));
-	Print(cx+1,cy+1,PSTR("MENU"));
-	SetTile(cx,cy+option,CURSOR_TILE); //draw new cursor
-
-	while(1){
-		c=ReadJoypad(0);
-	
-		if(c&(BTN_START|BTN_A|BTN_B)){
-		
-			while(ReadJoypad(0)!=0); //wait for key release
-		
-			if(option==0){
-				return 1;
-			}else{
-				return 0;
-			}		
-		}
-
-		if(c&BTN_UP || c&BTN_DOWN || c&BTN_SELECT){
-			RestoreTile(cx,cy+option); //erase old cursor
-			TriggerFx(1,0x90,1);
-
-			if(c&BTN_UP){
-				if(option==0){
-					option=1;
-				}else{
-					option--;
-				}
-
-			}else if(c&BTN_DOWN || c&BTN_SELECT){
-				if(option==1){
-					option=0;
-				}else{
-					option++;
+				}else{ //BTN_DOWN|BTN_SELECT
+					if(++option>2)
+						option=0;
 				}
 			}
-		
-			SetTile(cx,cy+option,CURSOR_TILE); //draw new cursor
-			while(ReadJoypad(0)!=0); //wait for key release
+			SetTile(14,16+option,CURSOR_TILE); //draw cursor
 		}
 	}
+
+	return 0;
 }
+
 
 
 void processAnimations(u8 f){ //animate non-locking stuff
@@ -625,57 +702,57 @@ void processAnimations(u8 f){ //animate non-locking stuff
 }
 
 
-void runStateMachine(){
-	switch(fields[f].currentState){
+void runStateMachine(u8 p){
+	switch(fields[p].currentState){
 		case 0: //moving
-			if(processGravity()==1){
+			if(processGravity(p)==1){
 				TriggerFx(4,0x90,1);
-				fields[f].subState=0;
-				fields[f].currentState=1;
+				fields[p].subState=0;
+				fields[p].currentState=1;
 				break;				
 			}
 
-			if(processControls()==1){
-				fields[f].currentState=6;
+			if(processControls(p)==1){
+				fields[p].currentState=6;
 			}
 			break;
 		case 1: //piece on ground
-			if(lockBlock()==1){
-				fields[f].subState=0;
-				fields[f].currentState=2;
+			if(lockBlock(p)==1){
+				fields[p].subState=0;
+				fields[p].currentState=2;
 			}
 			break;
 		case 2: //piece locked
-			if(animFields()==1){
-				fields[f].subState=0;
-				fields[f].currentState=3;
+			if(animField(p)==1){
+				fields[p].subState=0;
+				fields[p].currentState=3;
 			}
 			break;			
 		case 3: //done locking
-			if(updateFields()==1){
-				fields[f].subState=0;
-				fields[f].currentState=4;
+			if(updateField(p)==1){
+				fields[p].subState=0;
+				fields[p].currentState=4;
 			}
 			break;
 		case 4: //processing garbage
 
-if(!Uzenet_Sync(0)){return;}
+//if(!Uzenet_Sync(0)){return;}
 
-			if(processGarbage()==1){
-				fields[f].subState=0;
-				fields[f].currentState=5;			
+			if(processGarbage(p)==1){
+				fields[p].subState=0;
+				fields[p].currentState=5;			
 			}
 			break;	
 		case 5: //issuing new block
-			issueNewBlock();
-			updateGhostPiece(0);
-			fields[f].currentState=0;
+			issueNewBlock(p);
+			updateGhostPiece(p,0);
+			fields[p].currentState=0;
 			break;			
 		case 6: //dropping block
-			hardDrop();
+			hardDrop(p);
 			TriggerFx(4,0x90,1);
-			fields[f].subState=0;
-			fields[f].currentState=1;
+			fields[p].subState=0;
+			fields[p].currentState=1;
 	}
 }
 
@@ -691,7 +768,7 @@ void initFields(void){
 		fields[x].bottom=25;
 		fields[x].top=4;
 		fields[x].gameOver=0;
-		fields[x].lastButtons=0;
+		//fields[x].lastButtons=0;
 		fields[x].autoRepeatDelay=fields[x].maxAutoRepeatDelay;
 		fields[x].interRepeatDelay=fields[x].maxInterRepeatDelay;
 		fields[x].kickUp=0;		
@@ -708,7 +785,7 @@ void initFields(void){
 		fields[x].ghostBlockY=UNDEFINED;
 		fields[x].bagPos=7;
 		fields[x].nextBlockPosY=13;
-		fields[x].holdBlockPosY=2;
+		fields[x].holdBlockPosY=21;
 		fields[x].garbageQueue=0;
 		fields[x].backToBack=0;
 		fields[x].tSpin=0;
@@ -716,17 +793,16 @@ void initFields(void){
 		fields[x].tetrisAnimFrame=0;
 		fields[x].lastHole=0;
 	}
-
 	//set field specifics
 	fields[0].left=2;
 	fields[0].right=13;
 	fields[0].nextBlockPosX=14;
-	fields[0].holdBlockPosX=2;
+	fields[0].holdBlockPosX=14;
 
 	fields[1].left=28;
 	fields[1].right=39;
 	fields[1].nextBlockPosX=22;
-	fields[1].holdBlockPosX=34;
+	fields[1].holdBlockPosX=22;
 
 	for(u8 y=0;y<FIELD_HEIGHT;y++){
 		for(u8 x=0;x<FIELD_WIDTH;x++){
@@ -735,42 +811,35 @@ void initFields(void){
 		}
 	}
 
-	f=0;
-	issueNewBlock();
-	fields[f].currBlock=fields[f].nextBlock;
-	issueNewBlock(); //issue twice to have a "next" block randomly defined
-	updateFields();
-	updateGhostPiece(0);
-
-	if(vsMode){
-		f=1;
-		issueNewBlock();
-		fields[f].currBlock=fields[f].nextBlock;
-		issueNewBlock();
-		updateFields();
-		updateGhostPiece(0);
+	for(u8 i=0;i<2;i++){
+		issueNewBlock(i);
+		fields[i].currBlock=fields[i].nextBlock;
+		issueNewBlock(i); //issue twice to have a "next" block randomly defined
+		updateField(i);
+		updateGhostPiece(i,0);
 	}
 }
 
 
-u8 processGravity(void){
 
-	if(fields[f].locking){ //check lock delay
-		fields[f].currLockDelay++;
-		if(fields[f].currLockDelay>LOCK_DELAY){
-			fields[f].locking=0;
-			fields[f].currLockDelay=0;
-			fields[f].currGravity=0;
+u8 processGravity(u8 p){
+
+	if(fields[p].locking){ //check lock delay
+		fields[p].currLockDelay++;
+		if(fields[p].currLockDelay>LOCK_DELAY){
+			fields[p].locking=0;
+			fields[p].currLockDelay=0;
+			fields[p].currGravity=0;
 			return 1;
 		}
 	}else{
 
-		fields[f].currGravity++;
-		if(fields[f].currGravity>=fields[f].gravity){
-			fields[f].currGravity=0;
+		fields[p].currGravity++;
+		if(fields[p].currGravity>=fields[p].gravity){
+			fields[p].currGravity=0;
 			//attemp to move block down
-			if(!moveBlock(fields[f].currBlockX,fields[f].currBlockY+1)){
-				fields[f].locking=1;
+			if(!moveBlock(p, fields[p].currBlockX,fields[p].currBlockY+1)){
+				fields[p].locking=1;
 			}
 		}
 	}
@@ -778,76 +847,77 @@ u8 processGravity(void){
 }
 
 
-u8 lockBlock(void){
 
-	switch(fields[f].subState){
+u8 lockBlock(u8 p){
+
+	switch(fields[p].subState){
 
 		case 0:
-			drawTetramino(fields[f].currBlockX+fields[f].left,fields[f].currBlockY+fields[f].top,fields[f].currBlock,fields[f].currBlockRotation,10,0,1);
+			drawTetramino(fields[p].currBlockX+fields[p].left,fields[p].currBlockY+fields[p].top,fields[p].currBlock,fields[p].currBlockRotation,10,0,1);
 			break;
 		case 1:
-			drawTetramino(fields[f].currBlockX+fields[f].left,fields[f].currBlockY+fields[f].top,fields[f].currBlock,fields[f].currBlockRotation,12+fields[f].currBlock,0,1);
+			drawTetramino(fields[p].currBlockX+fields[p].left,fields[p].currBlockY+fields[p].top,fields[p].currBlock,fields[p].currBlockRotation,12+fields[p].currBlock,0,1);
 			break;
 
 		default:
-			drawTetramino(fields[f].currBlockX+fields[f].left,fields[f].currBlockY+fields[f].top,fields[f].currBlock,fields[f].currBlockRotation,0,0,1);
+			drawTetramino(fields[p].currBlockX+fields[p].left,fields[p].currBlockY+fields[p].top,fields[p].currBlock,fields[p].currBlockRotation,0,0,1);
 			//draw block on surface
-			s8 s=pgm_read_byte(&(tetraminos[fields[f].currBlock].size));
+			s8 s=pgm_read_byte(&(tetraminos[fields[p].currBlock].size));
 
 			for(s8 cy=0;cy<s;cy++){
 				for(s8 cx=0;cx<s;cx++){
-					s8 tile=pgm_read_byte(&(tetraminos[fields[f].currBlock].blocks[fields[f].currBlockRotation][(cy*s)+cx]));
+					s8 tile=pgm_read_byte(&(tetraminos[fields[p].currBlock].blocks[fields[p].currBlockRotation][(cy*s)+cx]));
 					if(tile!=0){
-						fields[f].surface[fields[f].currBlockY+cy][fields[f].currBlockX+cx]=fields[f].currBlock+1;
+						fields[p].surface[fields[p].currBlockY+cy][fields[p].currBlockX+cx]=fields[p].currBlock+1;
 					}
 				}
 			}
 
-			fields[f].currLockDelay=0;
-			fields[f].locking=0;
-			fields[f].hardDroppped=0;
+			fields[p].currLockDelay=0;
+			fields[p].locking=0;
+			fields[p].hardDroppped=0;
 
 			//detect potential t-spin
-			if(fields[f].currBlock==T_TETRAMINO && fields[f].lastOpIsRotation==1){
+			if(fields[p].currBlock==T_TETRAMINO && fields[p].lastOpIsRotation==1){
 				//check if at least 3 corners are occupied
 				u8 occupied=0;
 
-				if(fields[f].surface[(u8)fields[f].currBlockY][(u8)fields[f].currBlockX]!=0)occupied++;
-				if(fields[f].surface[(u8)fields[f].currBlockY][(u8)fields[f].currBlockX+2]!=0)occupied++;
-				if(fields[f].surface[(u8)fields[f].currBlockY+2][(u8)fields[f].currBlockX]!=0)occupied++;
-				if(fields[f].surface[(u8)fields[f].currBlockY+2][(u8)fields[f].currBlockX+2]!=0)occupied++;
+				if(fields[p].surface[(u8)fields[p].currBlockY][(u8)fields[p].currBlockX]!=0)occupied++;
+				if(fields[p].surface[(u8)fields[p].currBlockY][(u8)fields[p].currBlockX+2]!=0)occupied++;
+				if(fields[p].surface[(u8)fields[p].currBlockY+2][(u8)fields[p].currBlockX]!=0)occupied++;
+				if(fields[p].surface[(u8)fields[p].currBlockY+2][(u8)fields[p].currBlockX+2]!=0)occupied++;
 				if(occupied>=3){
-					fields[f].tSpin=1;
+					fields[p].tSpin=1;
 				}else{
-					fields[f].tSpin=0;
+					fields[p].tSpin=0;
 				}
 			}
 			return 1;
 	}
 
-	fields[f].subState++;
+	fields[p].subState++;
 	return 0;
 }
 
 
-u8 moveBlock(s8 x,s8 y){
-	u8 updateGhost=(fields[f].currBlockX!=x);
+u8 moveBlock(u8 p, s8 x,s8 y){
+	u8 updateGhost=(fields[p].currBlockX!=x);
 
 	//check if block can fit in the location
-	if(!fitCheck(x,y,fields[f].currBlock,fields[f].currBlockRotation)) return 0;
+	if(!fitCheck(p,x,y,fields[p].currBlock,fields[p].currBlockRotation)) return 0;
 
 	//erase previous block
-	if(updateGhost) updateGhostPiece(1);
-	drawTetramino(fields[f].currBlockX+fields[f].left,fields[f].currBlockY+fields[f].top,fields[f].currBlock,fields[f].currBlockRotation,0,1,1);	
+	if(updateGhost) updateGhostPiece(p,1);
+	drawTetramino(fields[p].currBlockX+fields[p].left,fields[p].currBlockY+fields[p].top,fields[p].currBlock,fields[p].currBlockRotation,0,1,1);	
 
-	fields[f].currBlockX=x;
-	fields[f].currBlockY=y;
+	fields[p].currBlockX=x;
+	fields[p].currBlockY=y;
 
 	//draw new one
-	if(updateGhost) updateGhostPiece(0);
-	drawTetramino(fields[f].currBlockX+fields[f].left,fields[f].currBlockY+fields[f].top,fields[f].currBlock,fields[f].currBlockRotation,0,0,1);
+	if(updateGhost) updateGhostPiece(p,0);
+	drawTetramino(fields[p].currBlockX+fields[p].left,fields[p].currBlockY+fields[p].top,fields[p].currBlock,fields[p].currBlockRotation,0,0,1);
 
-	fields[f].lastOpIsRotation=0;
+	fields[p].lastOpIsRotation=0;
 
 	return 1;
 }
@@ -860,13 +930,13 @@ s8 randomize(void){
 }
 
 
-void issueNewBlock(){
+void issueNewBlock(u8 p){
 
 	s8 b1,b2,b3,b4,b5,b6,b7;
-	s16 next=0;
-	
-	if(fields[f].bagPos==7){ //time to fill a new bag 
-if(!Uzenet_Sync(0)){return;}				
+	s8 next=0;
+	s8 nextnext=0;
+	if(fields[p].bagPos==7){ //time to fill a new bag 
+//if(!Uzenet_Sync(0)){return;}				
 		b1=randomize();
 		do{b2=randomize();}while (b2==b1);
 		do{b3=randomize();}while (b3==b2);
@@ -875,212 +945,205 @@ if(!Uzenet_Sync(0)){return;}
 		do{b6=randomize();}while (b6==b5);
 		do{b7=randomize();}while (b7==b6);
 
-		fields[f].bag[0]=b1;
-		fields[f].bag[1]=b2;
-		fields[f].bag[2]=b3;
-		fields[f].bag[3]=b4;
-		fields[f].bag[4]=b5;
-		fields[f].bag[5]=b6;
-		fields[f].bag[6]=b7;
+		fields[p].bag[0]=b1;
+		fields[p].bag[1]=b2;
+		fields[p].bag[2]=b3;
+		fields[p].bag[3]=b4;
+		fields[p].bag[4]=b5;
+		fields[p].bag[5]=b6;
+		fields[p].bag[6]=b7;
 
 		next=b1;
-		fields[f].bagPos=1;
+		nextnext=b2;
+		fields[p].bagPos=1;
 	}else{
-		next=fields[f].bag[fields[f].bagPos];
-		fields[f].bagPos++;
+		next=fields[p].bag[fields[p].bagPos++];
+		nextnext=fields[p].bag[fields[p].bagPos];
 	}
-	
-	//update the next block
-	drawTetramino(fields[f].nextBlockPosX,fields[f].nextBlockPosY,fields[f].nextBlock,0,0,1,0);
-	drawTetramino(fields[f].nextBlockPosX,fields[f].nextBlockPosY,next,0,0,0,0);
 
-	fields[f].currBlock=fields[f].nextBlock;
-	fields[f].nextBlock=next;
-	fields[f].currBlockX=3;
-	fields[f].currBlockY=0;
-	fields[f].currBlockRotation=0;
-	fields[f].kickUp=0;
-	fields[f].canHold=1;
+	drawTetramino(fields[p].nextBlockPosX,fields[p].nextBlockPosY,fields[p].nextBlock,0,0,1,0);
+	drawTetramino(fields[p].nextBlockPosX,fields[p].nextBlockPosY+3,fields[p].nextBlock,0,0,1,0);
+
+	drawTetramino(fields[p].nextBlockPosX,fields[p].nextBlockPosY,next,0,0,0,0);
+	drawTetramino(fields[p].nextBlockPosX,fields[p].nextBlockPosY+3,next,0,0,0,0);
+
+	fields[p].currBlock=fields[p].nextBlock;
+	fields[p].nextBlock=next;
+	fields[p].currBlockX=3;
+	fields[p].currBlockY=0;
+	fields[p].currBlockRotation=0;
+	fields[p].kickUp=0;
+	fields[p].canHold=1;
 	
 	//check if game over
-	if(!moveBlock(fields[f].currBlockX,fields[f].currBlockY))
-		doGameOver();
+	if(!moveBlock(p, fields[p].currBlockX,fields[p].currBlockY))
+		doGameOver(p);
 }
 
 
-void updateGhostPiece(u8 restore){ //this is an expensive function(up to 14613 cycles on empty well?)
+void updateGhostPiece(u8 p, u8 restore){ //this is an expensive function(up to 14613 cycles on empty well?)
 
-	if(uzenet_step >= UN_STEP_PLAYING && (f != uzenet_local_player)) //save some cycles, don't draw for what we can't control
+	if((!vsMode && p == 1) || (uzenet_step >= UN_STEP_PLAYING && (p != uzenet_local_player))) //save some cycles, don't draw for what we can't control
 		return;
 
-	if(!fields[f].noGhostBlock){
+	if(!fields[p].noGhostBlock){
 
-		s16 y=fields[f].currBlockY;
+		s16 y=fields[p].currBlockY;
 		while(1){
-			if(!fitCheck(fields[f].currBlockX,y,fields[f].currBlock,fields[f].currBlockRotation)) break;
+			if(!fitCheck(p,fields[p].currBlockX,y,fields[p].currBlock,fields[p].currBlockRotation)) break;
 			y++;
 		}
 
-		drawTetramino(fields[f].currBlockX+fields[f].left,y+fields[f].top-1,fields[f].currBlock,fields[f].currBlockRotation,GHOST_TILE,restore,1);
+		drawTetramino(fields[p].currBlockX+fields[p].left,y+fields[p].top-1,fields[p].currBlock,fields[p].currBlockRotation,GHOST_TILE,restore,1);
 	}
 }
 
 
-void hardDrop(void){
+void hardDrop(u8 p){
 
-	s16 y=fields[f].currBlockY;
+	s16 y=fields[p].currBlockY;
 	while(1){
-		if(!fitCheck(fields[f].currBlockX,y,fields[f].currBlock,fields[f].currBlockRotation)) break;
+		if(!fitCheck(p,fields[p].currBlockX,y,fields[p].currBlock,fields[p].currBlockRotation)) break;
 		y++;
 	}
 	
-	moveBlock(fields[f].currBlockX,y-1);
+	moveBlock(p, fields[p].currBlockX,y-1);
 	
-	fields[f].locking=0;
-	fields[f].currLockDelay=0;
-	fields[f].currGravity=0;
-	fields[f].hardDroppped=1;
+	fields[p].locking=0;
+	fields[p].currLockDelay=0;
+	fields[p].currGravity=0;
+	fields[p].hardDroppped=1;
 
 }
 
 
-void hold(void){
+void hold(u8 p){
 
-	if(fields[f].canHold){
+	if(fields[p].canHold){
 		//erase current block from field
-		updateGhostPiece(1);
-		drawTetramino(fields[f].currBlockX+fields[f].left,fields[f].currBlockY+fields[f].top,fields[f].currBlock,fields[f].currBlockRotation,0,1,1);
+		updateGhostPiece(p,1);
+		drawTetramino(fields[p].currBlockX+fields[p].left,fields[p].currBlockY+fields[p].top,fields[p].currBlock,fields[p].currBlockRotation,0,1,1);
 
-		if(fields[f].holdBlock==NO_BLOCK){
+		if(fields[p].holdBlock==NO_BLOCK){
 
-			fields[f].holdBlock=fields[f].currBlock;
+			fields[p].holdBlock=fields[p].currBlock;
 
 			//update the hold block
-			drawTetramino(fields[f].holdBlockPosX,fields[f].holdBlockPosY,fields[f].holdBlock,0,0,0,0);
+			drawTetramino(fields[p].holdBlockPosX,fields[p].holdBlockPosY,fields[p].holdBlock,0,0,0,0);
 
-			issueNewBlock();
-			updateGhostPiece(0);	
+			issueNewBlock(p);
+			updateGhostPiece(p,0);	
 		}else{
 			//swap the hold block and current block
-			drawTetramino(fields[f].holdBlockPosX,fields[f].holdBlockPosY,fields[f].holdBlock,0,0,1,0);
-			drawTetramino(fields[f].holdBlockPosX,fields[f].holdBlockPosY,fields[f].currBlock,0,0,0,0);
+			drawTetramino(fields[p].holdBlockPosX,fields[p].holdBlockPosY,fields[p].holdBlock,0,0,1,0);
+			drawTetramino(fields[p].holdBlockPosX,fields[p].holdBlockPosY,fields[p].currBlock,0,0,0,0);
 
 
-			s16 temp=fields[f].currBlock;
-			fields[f].currBlock=fields[f].holdBlock;
-			fields[f].holdBlock=temp;
+			s16 temp=fields[p].currBlock;
+			fields[p].currBlock=fields[p].holdBlock;
+			fields[p].holdBlock=temp;
 
-			fields[f].currBlockX=3;
-			fields[f].currBlockY=0;
-			fields[f].currBlockRotation=0;
-			fields[f].kickUp=0;
+			fields[p].currBlockX=3;
+			fields[p].currBlockY=0;
+			fields[p].currBlockRotation=0;
+			fields[p].kickUp=0;
 
-			fields[f].currLockDelay=0;
-			fields[f].locking=0;
+			fields[p].currLockDelay=0;
+			fields[p].locking=0;
 
 			//check if game over
-			if(!fitCheck(fields[f].currBlockX,fields[f].currBlockY,fields[f].currBlock,fields[f].currBlockRotation))
-				doGameOver();
+			if(!fitCheck(p,fields[p].currBlockX,fields[p].currBlockY,fields[p].currBlock,fields[p].currBlockRotation))
+				doGameOver(p);
 			
-			updateGhostPiece(0);
+			updateGhostPiece(p,0);
 		}
 
-		fields[f].canHold=0;
+		fields[p].canHold=0;
 	}
 }
 
 
-u8 processControls(void){
-	s16 dispX=0,dispY=0;
-	u16 joy=ReadJoypad(f);
+u8 processControls(u8 p){
+	s8 dispX=0,dispY=0;
 
 	//process hard drop
-	if((joy&BTN_UP) && !(fields[f].lastButtons&BTN_UP) && !(joy&BTN_RIGHT) && !(joy&BTN_LEFT)){
-		//hardDrop();
-		fields[f].lastButtons=joy;
+	if((fields[p].currButtons&BTN_UP) && !(fields[p].lastButtons&BTN_UP) && !(fields[p].currButtons&(BTN_RIGHT|BTN_LEFT))){
+		hardDrop(p);
 		return 1;
 	}
 
 	//process hold
-	if(((joy&BTN_SELECT) && !(fields[f].lastButtons&BTN_SELECT)) || ((joy&BTN_SR) && !(fields[f].lastButtons&BTN_SR)) ){
-		hold();
-		fields[f].lastButtons=joy;
-		return 0;
-	}
-
-	//process pause
-	if((joy&BTN_START) && !(fields[f].lastButtons&BTN_START)){
-		OptionsMenu(f);
+	if(((fields[p].currButtons&BTN_SELECT) && !(fields[p].lastButtons&BTN_SELECT)) || ((fields[p].currButtons&BTN_SR) && !(fields[p].lastButtons&BTN_SR)) ){
+		hold(p);
 		return 0;
 	}
 
 	//process left-right-down
-	if(joy&BTN_RIGHT){
-		if(!(fields[f].lastButtons&BTN_RIGHT) || (fields[f].autoRepeatDelay>fields[f].maxAutoRepeatDelay && fields[f].interRepeatDelay>fields[f].maxInterRepeatDelay)){
+	if(fields[p].currButtons&BTN_RIGHT){
+		if(!(fields[p].lastButtons&BTN_RIGHT) || (fields[p].autoRepeatDelay>fields[p].maxAutoRepeatDelay && fields[p].interRepeatDelay>fields[p].maxInterRepeatDelay)){
 			dispX=1;
 		}
 	}
 
-	if(joy&BTN_LEFT){
-		if(!(fields[f].lastButtons&BTN_LEFT) || (fields[f].autoRepeatDelay>fields[f].maxAutoRepeatDelay && fields[f].interRepeatDelay>fields[f].maxInterRepeatDelay)){
+	if(fields[p].currButtons&BTN_LEFT){
+		if(!(fields[p].lastButtons&BTN_LEFT) || (fields[p].autoRepeatDelay>fields[p].maxAutoRepeatDelay && fields[p].interRepeatDelay>fields[p].maxInterRepeatDelay)){
 			dispX=-1;
 		}
 	}
 
-	if(joy&BTN_DOWN){
-		if(fields[f].softDropDelay>SOFT_DROP_DELAY){
+	if(fields[p].currButtons&BTN_DOWN){
+		if(fields[p].softDropDelay>SOFT_DROP_DELAY){
 			dispY=1;
-			fields[f].softDropDelay=0;
+			fields[p].softDropDelay=0;
 		}
 	}
 
-	if((dispX!=0 || dispY!=0) && moveBlock(fields[f].currBlockX+dispX,fields[f].currBlockY+dispY)){
-		fields[f].currLockDelay=0;
-		fields[f].locking=0;
-		fields[f].interRepeatDelay=0;
+	if((dispX!=0 || dispY!=0) && moveBlock(p, fields[p].currBlockX+dispX,fields[p].currBlockY+dispY)){
+		fields[p].currLockDelay=0;
+		fields[p].locking=0;
+		fields[p].interRepeatDelay=0;
 		TriggerFx(5,0x40,1);
 	}
 
-	if(joy&(BTN_LEFT|BTN_RIGHT)){
-		fields[f].autoRepeatDelay++;
-		fields[f].interRepeatDelay++;
+	if(fields[p].currButtons&(BTN_LEFT|BTN_RIGHT)){
+		fields[p].autoRepeatDelay++;
+		fields[p].interRepeatDelay++;
 	}else{
-		fields[f].autoRepeatDelay=0;
-		fields[f].interRepeatDelay=0;
+		fields[p].autoRepeatDelay=0;
+		fields[p].interRepeatDelay=0;
 	}
 
-	if(joy&BTN_DOWN){
-		fields[f].softDropDelay++;
+	if(fields[p].currButtons&BTN_DOWN){
+		fields[p].softDropDelay++;
 	}else{
-		fields[f].softDropDelay=0;
+		fields[p].softDropDelay=0;
 	}
 
 	//process rotation
-	s16 rot=0;
-	if(joy&BTN_A && !(fields[f].lastButtons&BTN_A)){
+	s8 rot=0;
+	if(fields[p].currButtons&BTN_A && !(fields[p].lastButtons&BTN_A)){
 		//rotate right
-		rot=fields[f].currBlockRotation+1;
+		rot=fields[p].currBlockRotation+1;
 		if(rot==4) rot=0;
 		TriggerFx(5,0x40,1);
-		rotateBlock(rot);
+		rotateBlock(p,rot);
 	}
-	if(joy&BTN_B && !(fields[f].lastButtons&BTN_B)){
+	if(fields[p].currButtons&BTN_B && !(fields[p].lastButtons&BTN_B)){
 		//rotate right
-		if(fields[f].currBlockRotation==0){
+		if(fields[p].currBlockRotation==0){
 			rot=3;
 		}else{
-			rot=fields[f].currBlockRotation-1;
+			rot=fields[p].currBlockRotation-1;
 		}
 		TriggerFx(5,0x40,1);
-		rotateBlock(rot);
+		rotateBlock(p,rot);
 	}
 
-	fields[f].lastButtons=joy;
 	return 0;
 }
 
 
-u8 fitCheck(s8 x,s8 y,s8 block,s8 rotation){
+u8 fitCheck(u8 p, s8 x,s8 y,s8 block,s8 rotation){
 	//check if block overlaps existing blocks
 
 	s16 s=pgm_read_byte(&(tetraminos[block].size));
@@ -1093,7 +1156,7 @@ u8 fitCheck(s8 x,s8 y,s8 block,s8 rotation){
 				if((y+cy)>FIELD_HEIGHT-1 || (x+cx)<0 || (x+cx)>FIELD_WIDTH-1) return 0;
 
 				//check for collisions with surface blocks
-				if(fields[f].surface[y+cy][x+cx]!=0) return 0;
+				if(fields[p].surface[y+cy][x+cx]!=0) return 0;
 
 			}
 		}
@@ -1102,55 +1165,55 @@ u8 fitCheck(s8 x,s8 y,s8 block,s8 rotation){
 }
 
 
-u8 rotateBlock(s8 newRotation){
+u8 rotateBlock(u8 p, s8 newRotation){
 	s8 x,y;
 	u8 rotateRight=0;
 
-	if(fields[f].currBlockRotation==3 && newRotation==0){
+	if(fields[p].currBlockRotation==3 && newRotation==0){
 		rotateRight=1;
-	}else if(fields[f].currBlockRotation==0 && newRotation==3){
+	}else if(fields[p].currBlockRotation==0 && newRotation==3){
 		rotateRight=0;
-	}else if(newRotation > fields[f].currBlockRotation){
+	}else if(newRotation > fields[p].currBlockRotation){
 		rotateRight=1;
 	}
 
-	x=fields[f].currBlockX;
-	y=fields[f].currBlockY;
+	x=fields[p].currBlockX;
+	y=fields[p].currBlockY;
 
-	if(fields[f].currBlock==O_TETRAMINO) return 1; //can't rotate the square tetramino
+	if(fields[p].currBlock==O_TETRAMINO) return 1; //can't rotate the square tetramino
 
 
-	if(!fitCheck(x,y,fields[f].currBlock,newRotation)){
+	if(!fitCheck(p,x,y,fields[p].currBlock,newRotation)){
 		//try simple wall kicks
-		if(fitCheck(x+1,y,fields[f].currBlock,newRotation)){
+		if(fitCheck(p,x+1,y,fields[p].currBlock,newRotation)){
 			x++;
 		}else{
-			if(fitCheck(x-1,y,fields[f].currBlock,newRotation)){
+			if(fitCheck(p,x-1,y,fields[p].currBlock,newRotation)){
 				x--;
 			}else{
-				if(fitCheck(x,y-1,fields[f].currBlock,fields[f].currBlockRotation) && fitCheck(x,y-1,fields[f].currBlock,newRotation)){
+				if(fitCheck(p,x,y-1,fields[p].currBlock,fields[p].currBlockRotation) && fitCheck(p,x,y-1,fields[p].currBlock,newRotation)){
 					y--;
-					fields[f].kickUp=1;
+					fields[p].kickUp=1;
 				}else{
 					//special srs moves
-					if(rotateRight==1 && fitCheck(x-1,y+1,fields[f].currBlock,newRotation)){
+					if(rotateRight==1 && fitCheck(p,x-1,y+1,fields[p].currBlock,newRotation)){
 						x--;
 						y++;
-					}else if(rotateRight==1 && fitCheck(x-1,y+2,fields[f].currBlock,newRotation)){
+					}else if(rotateRight==1 && fitCheck(p,x-1,y+2,fields[p].currBlock,newRotation)){
 						x--;
 						y+=2;
-					}else if(rotateRight==0 && fitCheck(x+1,y+1,fields[f].currBlock,newRotation)){
+					}else if(rotateRight==0 && fitCheck(p,x+1,y+1,fields[p].currBlock,newRotation)){
 						x++;
 						y++;
-					}else if(rotateRight==0 && fitCheck(x+1,y+2,fields[f].currBlock,newRotation)){
+					}else if(rotateRight==0 && fitCheck(p,x+1,y+2,fields[p].currBlock,newRotation)){
 						x++;
 						y+=2;
 					}else{
 						//test 2 blocks for I tetramino
-						if(fitCheck(x+2,y,fields[f].currBlock,newRotation)){
+						if(fitCheck(p,x+2,y,fields[p].currBlock,newRotation)){
 							x+=2;
 						}else{
-							if(fitCheck(x-2,y,fields[f].currBlock,newRotation)){
+							if(fitCheck(p,x-2,y,fields[p].currBlock,newRotation)){
 								x-=2;
 							}else{
 								return 0;
@@ -1164,35 +1227,35 @@ u8 rotateBlock(s8 newRotation){
 	}
 
 	//if past rotations on same block resulted in a "kick-up", insure this rotation will not result in a space under it
-	if(fields[f].kickUp){
-		if(fitCheck(x,y+1,fields[f].currBlock,newRotation)){
+	if(fields[p].kickUp){
+		if(fitCheck(p,x,y+1,fields[p].currBlock,newRotation)){
 			y++;
 		}
 	}
 
-	updateGhostPiece(1); //erase previous block
-	drawTetramino(fields[f].currBlockX+fields[f].left,fields[f].currBlockY+fields[f].top,fields[f].currBlock,fields[f].currBlockRotation,0,1,1);
+	updateGhostPiece(p,1); //erase previous block
+	drawTetramino(fields[p].currBlockX+fields[p].left,fields[p].currBlockY+fields[p].top,fields[p].currBlock,fields[p].currBlockRotation,0,1,1);
 
-	fields[f].currBlockRotation=newRotation;
-	fields[f].currBlockX=x;
-	fields[f].currBlockY=y;
+	fields[p].currBlockRotation=newRotation;
+	fields[p].currBlockX=x;
+	fields[p].currBlockY=y;
 
-	updateGhostPiece(0); //draw new one
-	drawTetramino(fields[f].currBlockX+fields[f].left,fields[f].currBlockY+fields[f].top,fields[f].currBlock,fields[f].currBlockRotation,0,0,1);
+	updateGhostPiece(p,0); //draw new one
+	drawTetramino(fields[p].currBlockX+fields[p].left,fields[p].currBlockY+fields[p].top,fields[p].currBlock,fields[p].currBlockRotation,0,0,1);
 
-	fields[f].lastOpIsRotation=1;
-	fields[f].currLockDelay=0;
-	fields[f].locking=0;
+	fields[p].lastOpIsRotation=1;
+	fields[p].currLockDelay=0;
+	fields[p].locking=0;
 
 	return 1;
 }
 
 
-u8 lineCleared(s8 y){
+u8 lineCleared(u8 p, s8 y){
 
 	u8 cleared=1;
 	for(u8 x=0;x<10;x++){
-		if(fields[f].surface[y][x]!=0){
+		if(fields[p].surface[y][x]!=0){
 			cleared=0;
 			break;
 		}		
@@ -1201,11 +1264,11 @@ u8 lineCleared(s8 y){
 }
 
 
-u8 lineFull(s8 y){
+u8 lineFull(u8 p, s8 y){
 
 	u8 full=1;
 	for(u8 x=0;x<10;x++){
-		if(fields[f].surface[y][x]==0){
+		if(fields[p].surface[y][x]==0){
 			full=0;
 			break;
 		}		
@@ -1214,33 +1277,33 @@ u8 lineFull(s8 y){
 }
 
 
-u8 animFields(void){ //animate the cleared lines
+u8 animField(u8 p){ //animate the cleared lines
 	u8 y,size,tile,temp;
 
-	size=pgm_read_byte(&(tetraminos[fields[f].currBlock].size));
+	size=pgm_read_byte(&(tetraminos[fields[p].currBlock].size));
 
-	if(size+fields[f].currBlockY>FIELD_HEIGHT){
-		size=FIELD_HEIGHT-fields[f].currBlockY;
+	if(size+fields[p].currBlockY>FIELD_HEIGHT){
+		size=FIELD_HEIGHT-fields[p].currBlockY;
 	}
 	
-	switch(fields[f].subState){
+	switch(fields[p].subState){
 		
 		case 0 ... 1:
-			fields[f].lastClearCount=0;
+			fields[p].lastClearCount=0;
 			for(y=0;y<size;y++){
-				if(lineFull(fields[f].currBlockY+y)){				
-					fill(fields[f].left,y+fields[f].currBlockY+fields[f].top,FIELD_WIDTH,1,10);			
-					fields[f].lastClearCount++;
+				if(lineFull(p,fields[p].currBlockY+y)){				
+					fill(fields[p].left,y+fields[p].currBlockY+fields[p].top,FIELD_WIDTH,1,10);			
+					fields[p].lastClearCount++;
 				}		
 			}
 
-			if(fields[f].tSpin==1){
-				fields[f].tSpinAnimFrame=90;
+			if(fields[p].tSpin==1){
+				fields[p].tSpinAnimFrame=90;
 				TriggerFx(19,0xff,1);
-			}else if(fields[f].lastClearCount==4){
-				fields[f].tetrisAnimFrame=90;
+			}else if(fields[p].lastClearCount==4){
+				fields[p].tetrisAnimFrame=90;
 				TriggerFx(20,0xff,1);
-			}else if(fields[f].lastClearCount==0){
+			}else if(fields[p].lastClearCount==0){
 				return 1;				
 			}else{
 				//at least one line completed
@@ -1249,8 +1312,8 @@ u8 animFields(void){ //animate the cleared lines
 			break;
 
 		case 2 ... 23:
-			if(fields[f].lastClearCount<4){
-				switch(fields[f].subState){
+			if(fields[p].lastClearCount<4){
+				switch(fields[p].subState){
 					case 2 ... 6:
 						tile=22;
 						break;
@@ -1264,17 +1327,17 @@ u8 animFields(void){ //animate the cleared lines
 						tile=28;
 						break;
 				}
-				fields[f].subState++;
+				fields[p].subState++;
 			}else{
-				tile=22+(fields[f].subState/2);
+				tile=22+(fields[p].subState/2);
 				
 			}
 			
 
 			for(y=0;y<size;y++){
-				if(lineFull(fields[f].currBlockY+y)){		
+				if(lineFull(p,fields[p].currBlockY+y)){		
 
-					if((y+fields[f].currBlockY)<8){
+					if((y+fields[p].currBlockY)<8){
 						temp=tile+8;				
 					}else{
 						temp=tile;
@@ -1282,49 +1345,49 @@ u8 animFields(void){ //animate the cleared lines
 
 					if(temp>=37) temp=0;
 
-					fill(fields[f].left,y+fields[f].currBlockY+fields[f].top,FIELD_WIDTH,1,temp);						
+					fill(fields[p].left,y+fields[p].currBlockY+fields[p].top,FIELD_WIDTH,1,temp);						
 				}		
 			}
 			break;
 
 		default:
 			for(y=0;y<size;y++){		
-				if(lineFull(fields[f].currBlockY+y)){
+				if(lineFull(p,fields[p].currBlockY+y)){
 					//we have a completed row!
-					fillFieldLine(y+fields[f].currBlockY,0);
+					fillFieldLine(p,y+fields[p].currBlockY,0);
 				}		
 			}
 			return 1;  //last animation frame
 	}
 
-	fields[f].subState++;
+	fields[p].subState++;
 	return 0;
 }
 
 
-u8 updateFields(void){
+u8 updateField(u8 p){
 
 	//scan the surface for completed rows
 	s16 y,size,tail,clearCount,top,garbageLines=0,fx;	
 	u8 difficult=0;
 
-	size=pgm_read_byte(&(tetraminos[fields[f].currBlock].size));
+	size=pgm_read_byte(&(tetraminos[fields[p].currBlock].size));
 
-	if(size+fields[f].currBlockY>FIELD_HEIGHT){
-		size=FIELD_HEIGHT-fields[f].currBlockY;
+	if(size+fields[p].currBlockY>FIELD_HEIGHT){
+		size=FIELD_HEIGHT-fields[p].currBlockY;
 	}
 
-	clearCount=fields[f].lastClearCount;
+	clearCount=fields[p].lastClearCount;
 	if(clearCount>0){
 
-		if(fields[f].subState==0){
+		if(fields[p].subState==0){
 
 				tail=size-1;
 
 				for(top=0;top<size;top++){
 	
-					if(lineCleared(fields[f].currBlockY+tail)){			
-						copyFieldLines(fields[f].currBlockY,fields[f].currBlockY+1,tail);
+					if(lineCleared(p,fields[p].currBlockY+tail)){			
+						copyFieldLines(p,fields[p].currBlockY,fields[p].currBlockY+1,tail);
 					}else{
 						tail--;
 					}
@@ -1332,14 +1395,14 @@ u8 updateFields(void){
 				}
 
 
-		}else if(fields[f].subState<=clearCount){
+		}else if(fields[p].subState<=clearCount){
 				//move rest of field down
-				copyFieldLines(fields[f].subState-1,fields[f].subState,fields[f].currBlockY);
+				copyFieldLines(p,fields[p].subState-1,fields[p].subState,fields[p].currBlockY);
 
 		}else{	
 			//clear top lines
 			for(y=0;y<clearCount;y++){
-				fillFieldLine(y,0);
+				fillFieldLine(p,y,0);
 			}
 				
 			TriggerFx(10,0xa0,1);
@@ -1347,7 +1410,7 @@ u8 updateFields(void){
 			//Process garbage lines 
 			if(clearCount>0){
 
-				if(fields[f].tSpin==1){
+				if(fields[p].tSpin==1){
 					garbageLines=2*clearCount;
 				}else{
 					if(clearCount==2){
@@ -1359,28 +1422,28 @@ u8 updateFields(void){
 					}
 				}
 
-				if(garbageLines==4 || fields[f].tSpin==1){
+				if(garbageLines==4 || fields[p].tSpin==1){
 					difficult=1;
 				}
 
-				if(difficult && fields[f].backToBack!=0){
+				if(difficult && fields[p].backToBack!=0){
 					garbageLines++;
-					fx=22+fields[f].backToBack-1;
+					fx=22+fields[p].backToBack-1;
 					if(fx>25)fx=25;
 
 					TriggerFx(fx,0xff,1);
-					fields[f].backToBackAnimFrame=90;
+					fields[p].backToBackAnimFrame=90;
 				}
 
 				//send garbage lines to the other field(in 2 players mode)
 				if(vsMode){
-					if(fields[f].garbageQueue){
-						if(fields[f].garbageQueue >= garbageLines){
-							fields[f].garbageQueue -= garbageLines;
+					if(fields[p].garbageQueue){
+						if(fields[p].garbageQueue >= garbageLines){
+							fields[p].garbageQueue -= garbageLines;
 							garbageLines = 0;
 						}else{
-							garbageLines -= fields[f].garbageQueue;
-							fields[f].garbageQueue = 0;
+							garbageLines -= fields[p].garbageQueue;
+							fields[p].garbageQueue = 0;
 						}	
 					}
 						fields[1].garbageQueue+=garbageLines;
@@ -1391,7 +1454,7 @@ u8 updateFields(void){
 
 			//update score, lines, etc
 			if(clearCount!=0){
-				fields[f].lines+=clearCount;
+				fields[p].lines+=clearCount;
 				u16 bonus;
 				if(clearCount==1){
 					bonus=100;
@@ -1403,50 +1466,50 @@ u8 updateFields(void){
 					bonus=800;
 				}
 
-				if(fields[f].backToBack!=0)
+				if(fields[p].backToBack!=0)
 					bonus=(bonus*3)/2;
 
 				if(difficult){				
-					fields[f].backToBack++;
+					fields[p].backToBack++;
 				}else{
-					fields[f].backToBack=0;						
+					fields[p].backToBack=0;						
 				}
 
-				fields[f].score+=(fields[f].level*fields[f].height)*bonus;
+				fields[p].score+=(fields[p].level*fields[p].height)*bonus;
 
-				if(fields[f].score>999999)
-					fields[f].score=999999;
+				if(fields[p].score>999999)
+					fields[p].score=999999;
 			}		
 
-			if(fields[f].lines > fields[f].nextLevel){
+			if(fields[p].lines > fields[p].nextLevel){
 				//increase speed
-				if(fields[f].gravity>0){
-					fields[f].gravity--;
+				if(fields[p].gravity>0){
+					fields[p].gravity--;
 				}
-				fields[f].level+=1;
-				fields[f].nextLevel+=LINES_PER_LEVEL;
+				fields[p].level+=1;
+				fields[p].nextLevel+=LINES_PER_LEVEL;
 			}
-			fields[f].tSpin=0;
+			fields[p].tSpin=0;
 			return 1;
 		}
 	}else{
-		fields[f].tSpin=0;
+		fields[p].tSpin=0;
 		return 1;
 	}
 
 	//print scores, lines,etc
-//	u8 x = f?27:19;
+//	u8 x = p?27:19;
 
-//	PrintLong(x,18,fields[f].lines);
-//	PrintLong(x,21,fields[f].level);
-//	PrintLong(x,24,fields[f].score);	
+//	PrintLong(x,18,fields[p].lines);
+//	PrintLong(x,21,fields[p].level);
+//	PrintLong(x,24,fields[p].score);	
 
-	fields[f].subState++;
+	fields[p].subState++;
 	return 0;
 }
 
 
-void copyFieldLines(s8 rowSource,s8 rowDest,s8 len){
+void copyFieldLines(u8 p, s8 rowSource,s8 rowDest,s8 len){
 
 	if(len>0){
 		s8 rs=rowSource+len-1;
@@ -1454,12 +1517,12 @@ void copyFieldLines(s8 rowSource,s8 rowDest,s8 len){
 
 		for(s8 y=0;y<len;y++){
 			for(s8 x=0;x<10;x++){
-				fields[f].surface[rd][x]=fields[f].surface[rs][x];
-				if(rd+fields[f].top>=(fields[f].top+2)){
-					if(fields[f].surface[rs][x]==0){
-						RestoreTile(x+fields[f].left,rd+fields[f].top);
+				fields[p].surface[rd][x]=fields[p].surface[rs][x];
+				if(rd+fields[p].top>=(fields[p].top+2)){
+					if(fields[p].surface[rs][x]==0){
+						RestoreTile(x+fields[p].left,rd+fields[p].top);
 					}else{	
-						SetTile(x+fields[f].left,rd+fields[f].top,fields[f].surface[rs][x]);
+						SetTile(x+fields[p].left,rd+fields[p].top,fields[p].surface[rs][x]);
 					}
 				}
 			}
@@ -1490,18 +1553,18 @@ void restore(s16 x,s16 y,s16 width,s16 height){ //uses custom assembly function
 }
 
 
-void fillFieldLine(s8 y,u8 tile){
+void fillFieldLine(u8 p, s8 y,u8 tile){
 
 	for(u8 h=0;h<10;h++){	
-		fields[f].surface[y][h]=tile;
+		fields[p].surface[y][h]=tile;
 	}
 }
 
 
-void doGameOver(void){
-	u8 f2=(f^1);
+void doGameOver(u8 p){
+	u8 p2=(p^1);
 
-	fields[f].gameOver=1;
+	fields[p].gameOver=1;
 	StopSong();
 	TriggerFx(21,0xff,1);
 	WaitVsyncAndProcessAnimations(25);
@@ -1522,14 +1585,14 @@ void doGameOver(void){
 						temp=tile;
 					}
 
-					Fill(fields[f].left,fields[f].top+t-y+2,FIELD_WIDTH,1,temp);
+					Fill(fields[p].left,fields[p].top+t-y+2,FIELD_WIDTH,1,temp);
 					if(vsMode){
-						Fill(fields[f2].left,fields[f2].top+t-y+2,FIELD_WIDTH,1,temp);
+						Fill(fields[p2].left,fields[p2].top+t-y+2,FIELD_WIDTH,1,temp);
 					}	
 				}else{
-					restore(fields[f].left,fields[f].top+t-y+2,FIELD_WIDTH,1);
+					restore(fields[p].left,fields[p].top+t-y+2,FIELD_WIDTH,1);
 					if(vsMode){
-						restore(fields[f2].left,fields[f2].top+t-y+2,FIELD_WIDTH,1);
+						restore(fields[p2].left,fields[p2].top+t-y+2,FIELD_WIDTH,1);
 					}						
 				}					
 			}
@@ -1540,43 +1603,56 @@ void doGameOver(void){
 
 	for(u8 y=0;y<10;y++){
 		if(!vsMode){
-			if(y>0)restore(fields[f].left,fields[f].top+y-1+2,FIELD_WIDTH,1);
-			Print(fields[f].left,fields[f].top+y+2,strGameOver);
+			if(y>0)restore(fields[p].left,fields[p].top+y-1+2,FIELD_WIDTH,1);
+			Print(fields[p].left,fields[p].top+y+2,strGameOver);
 		}else{
-			if(y>0)restore(fields[f].left,fields[f].top+y-1+2,FIELD_WIDTH,1);
-			Print(fields[f].left,fields[f].top+y+2,strYouLose);
+			if(y>0)restore(fields[p].left,fields[p].top+y-1+2,FIELD_WIDTH,1);
+			Print(fields[p].left,fields[p].top+y+2,strYouLose);
 			
-			if(y>0)restore(fields[f2].left,fields[f2].top+y-1+2,FIELD_WIDTH,1);
-			Print(fields[f2].left+1,fields[f2].top+y+2,strYouWin);
+			if(y>0)restore(fields[p2].left,fields[p2].top+y-1+2,FIELD_WIDTH,1);
+			Print(fields[p2].left+1,fields[p2].top+y+2,strYouWin);
 
 		}
 		WaitVsyncAndProcessAnimations(1);
 	}
 
 	if(!vsMode){
-		Print(fields[f].left,fields[f].top+11,strGameOver);
+		Print(fields[p].left,fields[p].top+11,strGameOver);
 	}else{
-		Print(fields[f].left,fields[f].top+11,strYouLose);
-		Fill(fields[f2].left,fields[f2].top+10,FIELD_WIDTH,3,26);
-		Print(fields[f2].left+1,fields[f2].top+11,strYouWin);
+		Print(fields[p].left,fields[p].top+11,strYouLose);
+		Fill(fields[p2].left,fields[p2].top+10,FIELD_WIDTH,3,26);
+		Print(fields[p2].left+1,fields[p2].top+11,strYouWin);
 
 	}
 
 	u8 a=1;
 	u8 y=1;
 	while(1){
-		
-		WaitVsyncAndProcessAnimations(2);
 
-		if(ReadJoypad(0)&(BTN_A|BTN_B|BTN_START)){
-			
-			while(ReadJoypad(0)!=0); //wait for key release			
-			return;			
+		WaitVsyncAndProcessAnimations(1);
+		for(u8 i=0;i<2;i++){
+//if(i == 1)break;
+			Fill(fields[i].left,fields[i].top+12,FIELD_WIDTH,10,0);
+			Print(fields[i].left,18,PSTR("LINES"));
+			PrintByte(fields[i].left+6,19,fields[i].lines,1);
+			Print(fields[i].left,21,PSTR("LEVEL"));
+			PrintByte(fields[i].left+6,22,fields[i].level,1);
+			Print(fields[i].left,24,PSTR("SCORE"));
+			PrintInt(fields[i].left+9,25,(fields[i].score)&0xFFFF,1);
+			PrintInt(fields[i].left+4,25,((fields[i].score)>>16)&0xFFFF,1);
+			fields[i].lastButtons=fields[i].currButtons;
+			fields[i].currButtons=ReadJoypad(i);
+
+			if((fields[i].currButtons&(BTN_START) && !(fields[i].lastButtons&(BTN_START)))){	
+				fields[0].lastButtons |= BTN_START;
+				fields[1].lastButtons |= BTN_START;
+				return;
+			}
 		}	
 
 		if(vsMode){
-			Fill(fields[f2].left,fields[f2].top+10,FIELD_WIDTH,3,22+a);			
-			Print(fields[f2].left+1,fields[f2].top+11,strYouWin);
+			Fill(fields[p2].left,fields[p2].top+10,FIELD_WIDTH,3,22+a);			
+			Print(fields[p2].left+1,fields[p2].top+11,strYouWin);
 			a+=y;
 			if(a==6){				
 				y=-1;
@@ -1606,7 +1682,7 @@ void drawTetramino(s8 x,s8 y,s8 tetramino,s8 rotation,s8 forceTile,u8 restore,u8
 			u8 tile=pgm_read_byte(&(tetraminos[tetramino].blocks[rotation][(cy*s)+cx]));
 			if(tile!=0){
 								
-				if(!clipToField || (clipToField && (cy+y)>=(fields[f].top+2)) ){
+				if(!clipToField || (clipToField && (cy+y)>=(fields[0].top+2)) ){
 
 					if(restore){			
 						RestoreTile(cx+x,cy+y);
@@ -1621,8 +1697,8 @@ void drawTetramino(s8 x,s8 y,s8 tetramino,s8 rotation,s8 forceTile,u8 restore,u8
 }
 
 
-u8 processGarbage(){
-	if(fields[f].garbageQueue>0){
+u8 processGarbage(u8 p){
+	if(fields[p].garbageQueue>0){
 		s8 rs,rd;
 
 		rs=1;
@@ -1632,14 +1708,14 @@ u8 processGarbage(){
 			for(u8 x=0;x<10;x++){
 
 				//update the field array
-				fields[f].surface[rd][x]=fields[f].surface[rs][x];
+				fields[p].surface[rd][x]=fields[p].surface[rs][x];
 				
 				//draw only the visible rows
-				if(rd+fields[f].top>=(fields[f].top+2)){
-					if(fields[f].surface[rs][x]==0){
-						RestoreTile(x+fields[f].left,rd+fields[f].top);
+				if(rd+fields[p].top>=(fields[p].top+2)){
+					if(fields[p].surface[rs][x]==0){
+						RestoreTile(x+fields[p].left,rd+fields[p].top);
 					}else{	
-						SetTile(x+fields[f].left,rd+fields[f].top,fields[f].surface[rs][x]);
+						SetTile(x+fields[p].left,rd+fields[p].top,fields[p].surface[rs][x]);
 					}
 				}
 			}
@@ -1650,28 +1726,28 @@ u8 processGarbage(){
 		rd=FIELD_HEIGHT-1;
 		u8 hole=(GetPrngNumber(0) % 200);
 		if(hole < GARBAGE_ALIGNMENT_PROBABILITY) //draw aligned to the last hole
-			hole = fields[f].lastHole;
+			hole = fields[p].lastHole;
 		else{
 			hole=(GetPrngNumber(0) % 9);
-			fields[f].lastHole = hole; //store this for next time
+			fields[p].lastHole = hole; //store this for next time
 		}
 		
 		for(u8 y=0;y<1;y++){ //draw garbage lines at bottom of field
 			for(u8 x=0;x<10;x++){
 				if(x==hole){
-					RestoreTile(x+fields[f].left,fields[f].bottom-y);
-					fields[f].surface[rd][x]=0;
+					RestoreTile(x+fields[p].left,fields[p].bottom-y);
+					fields[p].surface[rd][x]=0;
 				}else{
-					SetTile(x+fields[f].left,fields[f].bottom-y,8);
-					fields[f].surface[rd][x]=8;
+					SetTile(x+fields[p].left,fields[p].bottom-y,8);
+					fields[p].surface[rd][x]=8;
 				}
 			}
 			rd--;
 		}
 
-		fields[f].garbageQueue--;
+		fields[p].garbageQueue--;
 
-		if(fields[f].garbageQueue==0){
+		if(fields[p].garbageQueue==0){
 			return 1;
 		}
 
@@ -1682,6 +1758,11 @@ u8 processGarbage(){
 		return 1;
 	}
 	
-	fields[f].subState++;
+	fields[p].subState++;
 	return 0;
 }
+
+
+#if CPU_PLAYER > 0
+
+#endif

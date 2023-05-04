@@ -217,38 +217,51 @@ extern void SetTileMap(const int *data);
 
 void StartSongNo(u8 songNo);
 void drawTetramino(s8 x,s8 y,s8 tetramino,s8 rotation,s8 forceTile,u8 restore,u8 clipToField);
-u8 processGravity(void);
-u8 processControls(void);
-u8 updateFields(void);
+u8 processGravity(u8 p);
+u8 processControls(u8 p);
+u8 updateField(u8 p);
 void initFields(void);
-u8 moveBlock(s8 dispX,s8 dispY);
-void issueNewBlock();
-u8 lockBlock(void);
-void doGameOver(void);
-u8 rotateBlock(s8 newRotation);
-u8 fitCheck(s8 x,s8 y,s8 block,s8 rotation);
-void hardDrop(void);
-void fillFieldLine(s8 y,u8 tile);
-void copyFieldLines(s8 rowSource,s8 rowDest,s8 len);
+u8 moveBlock(u8 p, s8 dispX,s8 dispY);
+void issueNewBlock(u8 p);
+u8 lockBlock(u8 p);
+void doGameOver(u8 p);
+u8 rotateBlock(u8 p, s8 newRotation);
+u8 lineCleared(u8 p, s8 y);
+u8 fitCheck(u8 p, s8 x,s8 y,s8 block,s8 rotation);
+void hardDrop(u8 p);
+void fillFieldLine(u8 p, s8 y,u8 tile);
+void copyFieldLines(u8 p, s8 rowSource,s8 rowDest,s8 len);
 void fill(s8 x,s8 y,s8 width,s8 height,u8 tile);
 void updateStats(s16 lines,s16 softDropTiles,s16 hardDropTiles,s16 tSpin);
-void hold(void);
-void updateGhostPiece(u8 restore);
+void hold(u8 p);
+void updateGhostPiece(u8 p, u8 restore);
 void restore(s16 x,s16 y,s16 width,s16 height);
 s8 randomize(void);
-u8 processGarbage();
-void runStateMachine();
-u8 animFields(void);
+u8 processGarbage(u8 p);
+void runStateMachine(u8 p);
+u8 animField(u8 p);
 void WaitVsyncAndProcessAnimations(u8 count);
 u8 doGameContinue(void);
 u8 MainMenu(void);
-void OptionsMenu(u8 p);
+u8 OptionsMenu();
 void restoreFields(void);
-int UzenetConnect();
+int ConnectMenu();
 
 void processAnimations(u8 f);
 
+const u8 sin_tablex[] PROGMEM = {
+0x12,0x15,0x18,0x1b,0x1e,0x20,0x22,0x23,
+0x24,0x24,0x24,0x23,0x22,0x20,0x1e,0x1b,
+0x18,0x15,0x12,0xf,0xc,0x9,0x6,0x4,
+0x2,0x1,0x0,0x0,0x0,0x1,0x2,0x4,
+0x6,0x9,0xc,0xf,0x12,
+};
 
+const u8 sin_tabley[] PROGMEM = {
+0xc,0xf,0x12,0x14,0x16,0x18,0x18,0x18,
+0x16,0x14,0x12,0xf,0xc,0x9,0x6,0x4,
+0x2,0x0,0x0,0x0,0x2,0x4,0x6,0x9,
+};
 struct fieldStruct {
 	u8 currentState;
 	u8 subState;	
@@ -279,7 +292,7 @@ struct fieldStruct {
 	u8 gameOver;
 	u8 canHold;
 	unsigned int lastButtons;
-//	unsigned int currButtons;
+	unsigned int currButtons;
 	u8 autoRepeatDelay;
 	u8 interRepeatDelay;
 	u8 maxAutoRepeatDelay;
@@ -330,7 +343,7 @@ const char strYouLose[] PROGMEM ="YOU LOSE!!";
 u8 vsMode;
 u8 restart;
 
-u8 f=0; 			//active field
+//u8 f=0; 			//active field
 
 u8 songNo=0;	//default song
 #endif
