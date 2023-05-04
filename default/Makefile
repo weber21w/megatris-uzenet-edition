@@ -22,8 +22,8 @@ MIX_PATH_ESC:= $(subst $(SPACE),$(SPACE_ESC),$(MIX_PATH))
 
 KERNEL_OPTIONS = -DVIDEO_MODE=1 -DSOUND_MIXER=1 -DINTRO_LOGO=0 -DTRUE_RANDOM_GEN=1 -DMODE1_FAST_VSYNC=1
 KERNEL_OPTIONS += -DCONTROLLERS_VSYNC_READ=0 -DUART_RX_BUFFER_SIZE=256 -DUART_TX_BUFFER_SIZE=8 -DUART=1
-KERNEL_OPTIONS += -DMUSIC_ENGINE=STREAM -DSONG_SPEED=1 -DNO_EEPROM_FORMAT=1
-KERNEL_OPTIONS += -DMIXER_WAVES=\"$(MIX_PATH_ESC)\"
+KERNEL_OPTIONS += -DMUSIC_ENGINE=STREAM -DSONG_SPEED=1 -DNO_EEPROM_FORMAT=1 -DCPU_PLAYER=2 -DHEADLESS=1
+KERNEL_OPTIONS += -DMIXER_WAVES=\"$(MIX_PATH_ESC)\" -DSCREEN_TILES_V=27
 
 UZEBIN_DIR = ../../../bin
 ## Options common to compile, link and assembly rules
@@ -58,7 +58,7 @@ HEX_EEPROM_FLAGS += --change-section-lma .eeprom=0 --no-change-warnings
 RESOURCES = ../data/font.inc ../data/graphics.inc ../data/music/Korobeiniki-3tracks.inc ../data/music/testrisnt.inc ../data/music/ending.inc ../data/music.inc 
 
 ## Objects that must be built in order to link
-OBJECTS = uzeboxVideoEngineCore.o asmFunctions.o uzeboxCore.o uzeboxSoundEngine.o uzeboxSoundEngineCore.o uzeboxVideoEngine.o spiram.o $(GAME).o 
+OBJECTS = uzeboxVideoEngineCore.o asmFunctions.o uzeboxCore.o uzeboxSoundEngine.o uzeboxSoundEngineCore.o uzeboxVideoEngine.o spiram.o keyboard.o $(GAME).o 
 
 ## Objects explicitly added by the user
 LINKONLYOBJECTS = 
@@ -115,7 +115,10 @@ asmFunctions.o: ../asmFunctions.s
 spiram.o: $(KERNEL_DIR)/spiram.s
 	$(CC) $(INCLUDES) $(ASMFLAGS) -c  $<
 
-$(GAME).o: ../Megatris.c
+keyboard.o: $(KERNEL_DIR)/keyboard.c
+	$(CC) $(INCLUDES) $(CFLAGS) -c  $<
+
+$(GAME).o: ../$(GAME).c
 	$(CC) $(INCLUDES) $(CFLAGS) -c  $<
 
 
