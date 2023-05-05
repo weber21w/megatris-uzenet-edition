@@ -102,7 +102,13 @@ int main(){
 		}
 		while(ReadJoypad(0)&BTN_START);
 	}
-
+/*
+GetPrngNumber(0b00000001);
+for(u8 i=0;i<25;i++){
+PrintInt(9,i,GetPrngNumber(0),1);PrintInt(21,i,GetPrngNumber(0),1);PrintInt(33,i,GetPrngNumber(0),1);
+}
+while(1);
+*/
 #if CPU_PLAYER > 0
 	//SetRenderingParameters(110U, 32U);//(FIRST_RENDER_LINE+10,FRAME_LINES-10);
 #endif
@@ -148,6 +154,16 @@ GAME_NEW_MATCH:
 
 			fields[0].currentState=0;
 			fields[1].currentState=0;
+
+			if(uzenet_state & UN_STATE_GOT_NAMES){//draw the network names if applicable
+				SpiRamSeqReadStart(0,UN_PLAYER_INFO_BASE);
+				for(u8 i=0;i<2;i++){
+					for(u8 j=0;j<13;j++){
+						SetFont(fields[i].left,fields[i].top,SpiRamSeqReadU8());
+					}
+				}
+				SpiRamSeqReadEnd();
+			}
 
 			while(!fields[0].gameOver && !fields[1].gameOver){//on going match
 				WaitVsync(1); //syncronize gameplay on vsync (60 hz)
@@ -207,7 +223,7 @@ u8 OptionsMenu(){
 		if(i == 1 && ! vsMode)
 			break;
 		dx = fields[i].left+1;
-		fill(fields[i].left,fields[i].top+2,FIELD_WIDTH,FIELD_HEIGHT-2,0);
+		fill(fields[i].left,fields[i].top+8,FIELD_WIDTH,FIELD_HEIGHT-8,0);
 		Print(dx,14,PSTR("RESUME"));
 		Print(dx,15,PSTR("RESTART"));
 		Print(dx,16,PSTR("QUIT"));
@@ -216,7 +232,10 @@ u8 OptionsMenu(){
 	}
 
 //	goto FIRST_DRAW; //avoid taking too long before field is overwritten...
-
+Print(0,0,PSTR("1P>ALL YOUR BASE ARE BELONG TO US!!"));
+Print(0,1,PSTR("FOR GREAT JUSTICE! MUAHAHA!"));
+Print(0,3,PSTR("2P>WHAT YOU SAY?! OH NO HE SET US U"));
+Print(0,4,PSTR("P THE BOMB. MAKE YOUR TIME."));
 	while(1){
 		u8 menuSfx = 0;
 		WaitVsync(1);
@@ -369,76 +388,70 @@ int ConnectMenu(){
 			uzenet_state |= UN_FIND_OPPONENT;
 		}
 //if(timer == 30)uzenet_step=UN_CONNECT_SERVER;
-if(anim0 > 3){
+anim0++;
+if(anim0 > 2){
 	anim0 = 0;
 	anim1++;
 	anim2 = anim1>>1;
 	anim3 = anim2>>1;
 }
 
-if(1){
-//if(anim >= sizeof(sin_table)*2)
-//	anim = 0;
-		for(u8 i=0;i<SCREEN_TILES_H;i++){
-		//	SetTile(10+i,10+pgm_read_byte(&sin_table[(anim+i)%sizeof(sin_table)]),1);
-	//		SetTile(10+i,SCREEN_TILES_V-7-pgm_read_byte(&sin_table[(anim+i)%sizeof(sin_table)]),2);
-		//	SetTile(10+i,SCREEN_TILES_V-7-pgm_read_byte(&sin_table[(anim+i)%sizeof(sin_table)]),((anim+i)%4)+1);
-			//SetTile(10+i,SCREEN_TILES_V-7-pgm_read_byte(&sin_table[((anim/2)+i)%sizeof(sin_table)]),3);
-		//	SetTile(10+i,SCREEN_TILES_V-7-pgm_read_byte(&sin_table[(anim+i)%sizeof(sin_table)])/2,3);
-		}
-}
-//drawTetramino(10,pgm_read_byte(&sin_table[(anim%sizeof(sin_table))]),0,(anim>>3)%3,0,0,0);
-//drawTetramino(15,pgm_read_byte(&sin_table[(anim%sizeof(sin_table))]),1,(anim>>4)%3,0,0,0);
-//drawTetramino(20,pgm_read_byte(&sin_table[(anim%sizeof(sin_table))]),2,(anim>>3)%3,0,0,0);
-//drawTetramino(10,SCREEN_TILES_V-4-pgm_read_byte(&sin_table[(anim%sizeof(sin_table))]),3,(anim>>3)%3,0,0,0);
-//drawTetramino(15,SCREEN_TILES_V-4-pgm_read_byte(&sin_table[(anim%sizeof(sin_table))]),4,(anim>>4)%3,0,0,0);
-//drawTetramino(20,SCREEN_TILES_V-4-pgm_read_byte(&sin_table[(anim%sizeof(sin_table))]),5,(anim>>3)%3,0,0,0);
-drawTetramino(pgm_read_byte(&sin_tablex[(anim2%sizeof(sin_tablex))]),pgm_read_byte(&sin_tabley[(anim2%sizeof(sin_tabley))]),((anim3+0)>>3)%5,(anim3>>1)%3,0,0,0);
-drawTetramino(pgm_read_byte(&sin_tablex[(anim1%sizeof(sin_tablex))]),pgm_read_byte(&sin_tabley[(anim3%sizeof(sin_tabley))]),((anim3+1)>>3)%5,(anim3>>1)%3,0,0,0);
-drawTetramino(pgm_read_byte(&sin_tablex[(anim3%sizeof(sin_tablex))]),pgm_read_byte(&sin_tabley[(anim1%sizeof(sin_tabley))]),((anim3+2)>>3)%5,(anim3>>1)%3,0,0,0);
+
 u16 c;
 		if(!error){
-			if(!connected){
+			if(!(uzenet_state&UN_SERVER_DETECTED)){
 				Print(9,16,PSTR("CONNECTING TO UZENET...."));
 			}else{
-				Print(4,16,PSTR("WAITING FOR OPPONENT...."));
-				Print(4,19,PSTR("PRESS A FOR BOT MATCH"));
+				Print(9,16,PSTR("WAITING FOR OPPONENT...."));
+				Print(9,19,PSTR("PRESS A FOR BOT MATCH"));
 			}
 		}else{//some error happened
 			Print(4,14,PSTR("ERROR 0X"));
 			PrintHexByte(12,14,uzenet_error);
 			Print(4,16,PSTR("NETWORK ERROR OR MODULE FAILURE"));
-			Print(4,18,PSTR("RUN SETUP TOOL IF THIS PERSISTS"));
+			Print(4,18,PSTR("CHECK INTERNET OR RUN SETUP TOOL"));
+			Print(4,20,PSTR("IF THIS PROBLEM PERSISTS"));
 		c = ReadJoypad(0);
 		if(c & BTN_B){
 			while(ReadJoypad(0) != 0); //wait for key release
 			TriggerFx(5,0xff,1);
 			FadeOut(1,1);
 			FadeIn(1,0);
+			if(uzenet_error)
+				uzenet_step = 0;//if it's an error, it could be transient...try to start it all over(will take a bit)
 			return 0;//go back to main menu
 		}
 		}
-		Print(error?4:11,20,PSTR("PRESS B TO CANCEL       "));
+		Print(error?4:11,22,PSTR("PRESS B TO CANCEL       "));
+//+((anim3+1)>>3)%5
+//drawTetramino(pgm_read_byte(&sin_tablex[(anim2%sizeof(sin_tablex))]),pgm_read_byte(&sin_tabley[(anim2%sizeof(sin_tabley))]),0,anim1&3,0,0,0);
+//drawTetramino(pgm_read_byte(&sin_tablex[(anim1%sizeof(sin_tablex))]),pgm_read_byte(&sin_tabley[(anim3%sizeof(sin_tabley))]),1,anim2&3,0,0,0);
+drawTetramino(pgm_read_byte(&sin_tablex[(anim3%sizeof(sin_tablex))]),pgm_read_byte(&sin_tabley[(anim1%sizeof(sin_tabley))]),2,anim3&3,0,0,0);
+//drawTetramino(pgm_read_byte(&sin_tablex[(anim2%sizeof(sin_tablex))]),pgm_read_byte(&sin_tabley[(anim3%sizeof(sin_tabley))]),3,anim1&3,0,0,0);
+//drawTetramino(pgm_read_byte(&sin_tablex[(anim1%sizeof(sin_tablex))]),pgm_read_byte(&sin_tabley[(anim2%sizeof(sin_tabley))]),4,anim2&3,0,0,0);
+drawTetramino(pgm_read_byte(&sin_tablex[(anim3%sizeof(sin_tablex))]),pgm_read_byte(&sin_tabley[(anim3%sizeof(sin_tabley))]),5,anim3&3,0,0,0);
 
 
-		if(c & BTN_A)
-			UartSendChar('C');//since we are in simple 2P matchmaking mode, this is all we need to do and the server will make a bot join
+//		if(c & BTN_A)
+//			UartSendChar('C');//since we are in simple 2P matchmaking mode, this is all we need to do and the server will make a bot join
 
 		if(error)
 			continue;
 
-//		for(uint8_t j=29;j<35;j++){//animate "progress bar"
+		for(uint8_t j=29;j<35;j++){//animate "progress bar"
 
-//			if(((timer&31)/8) > j-29)
-//				continue;
-//			SetTile(j,16,0);
-//		}
+			if(((timer&31)/8) > j-29)
+				continue;
+			SetTile(j,16,0);
+		}
 
-		if(uzenet_error || timer == ((60*4)-1)){ //something timed out, indicating an unrecoverable error
+		if(uzenet_error || (!(uzenet_state&UN_SERVER_DETECTED) && (timer == ((60*4)-1)))){ //something timed out, indicating an unrecoverable error
 			error = 1;
 			TriggerFx(21,0xff,1);
 		}
 
+		if(uzenet_step >= UN_STEP_PLAYING)
+			break;
 //		if(connected && !error && uzenet_step > UN_CONNECT_SERVER) //now in game?
 //			break;
 	}
@@ -473,7 +486,7 @@ u16 c;
 			return 0;//go back to main menu
 		}
 
-		if(!got1){//still need player 1 name?
+	/*	if(!got1){//still need player 1 name?
 			s16 c = UartReadChar();
 			if(c != -1){
 				c &= 0xff;
@@ -484,7 +497,7 @@ u16 c;
 			requested2 = 1;//don't request again
 			UartSendChar(UN_GET_PLAYER_NAME2);//get name of second player from the server...
 		}
-
+*/
 		if(!vram[(VRAM_TILES_H*19)+9] || !vram[(VRAM_TILES_H*21)+9]){ //didn't get player names yet? wait until we do, so we can copy it to the game field
 			Print(9,18,PSTR("RETRIEVING DATA...."));
 
@@ -932,6 +945,8 @@ s8 randomize(void){
 
 void issueNewBlock(u8 p){
 
+	if(p && !vsMode)
+		return;
 	s8 b1,b2,b3,b4,b5,b6,b7;
 	s8 next=0;
 	s8 nextnext=0;
@@ -1615,7 +1630,7 @@ void doGameOver(u8 p){
 		}
 		WaitVsyncAndProcessAnimations(1);
 	}
-
+/*
 	if(!vsMode){
 		Print(fields[p].left,fields[p].top+11,strGameOver);
 	}else{
@@ -1624,15 +1639,18 @@ void doGameOver(u8 p){
 		Print(fields[p2].left+1,fields[p2].top+11,strYouWin);
 
 	}
-
+*/
 	u8 a=1;
 	u8 y=1;
+	u8 anim=22;
 	while(1){
+		if(++anim>29)
+			anim=22;
 
-		WaitVsyncAndProcessAnimations(1);
 		for(u8 i=0;i<2;i++){
-//if(i == 1)break;
-			Fill(fields[i].left,fields[i].top+12,FIELD_WIDTH,10,0);
+			if(i == 1 && !vsMode)
+				break;
+			Fill(fields[i].left,fields[i].top+8,FIELD_WIDTH,FIELD_HEIGHT-8,0);
 			Print(fields[i].left,18,PSTR("LINES"));
 			PrintByte(fields[i].left+6,19,fields[i].lines,1);
 			Print(fields[i].left,21,PSTR("LEVEL"));
@@ -1651,7 +1669,11 @@ void doGameOver(u8 p){
 		}	
 
 		if(vsMode){
-			Fill(fields[p2].left,fields[p2].top+10,FIELD_WIDTH,3,22+a);			
+			//Fill(fields[p2].left,fields[p2].top+10,FIELD_WIDTH,3,22+a);
+			Print(fields[p].left,fields[p].top+11,strYouLose);
+Print(0,0,PSTR("1>GG!"));
+Print(0,3,PSTR("2>HAAAXX!!"));
+		Fill(fields[p2].left,fields[p2].top+10,FIELD_WIDTH,3,anim);
 			Print(fields[p2].left+1,fields[p2].top+11,strYouWin);
 			a+=y;
 			if(a==6){				
@@ -1659,7 +1681,9 @@ void doGameOver(u8 p){
 			}else if(a==0){
 				y=1;
 			}
-		}
+		}else
+			Print(fields[p].left,fields[p].top+11,strGameOver);
+		WaitVsyncAndProcessAnimations(1);
 	}
 }
 

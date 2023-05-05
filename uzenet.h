@@ -121,6 +121,9 @@ const char UN_STR_ERROR[] PROGMEM = "ERROR";
 #define UN_SERVER_DETECTED	64
 #define UN_FIND_OPPONENT	128
 #define UN_DETECTED_RSVP	256
+#define UN_STATE_GOT_NAMES	512
+
+#define UN_DO_SYNC		1024
 
 
 
@@ -133,9 +136,6 @@ const char UN_STR_ERROR[] PROGMEM = "ERROR";
 #define UN_MATCH_HAVE_NAMES	4//we have all the names of the players in the room?
 #define UN_MATCH_WAS_KICKED	8//we got kicked from the room somehow?
 
-#define UN_COMMAND_UPPERCASE	10
-#define UN_GET_PLAYER_NAME1	21
-#define UN_GET_PLAYER_NAME2	22
 
 #define UN_PASS_EEPROM_OFF	23//8 characters long
 #define UN_HOST_EEPROM_OFF	11//up to 8 characters long, used as a suffix to "uze", so a value of "net.us" implies the hostname "uzenet.us"(was the old/unused MAC attribute).
@@ -144,6 +144,7 @@ const char UN_STR_ERROR[] PROGMEM = "ERROR";
 #define UN_SPIR_BASE_RX	UN_SPIR_BASE_TX+128
 #define UN_PASS_BASE		UN_SPIR_BASE_RX+512
 #define UN_HOST_BASE		UN_PASS_BASE+16
+#define UN_PLAYER_INFO_BASE	4096
 
 #define UN_STEP_RESET		0
 #define UN_STEP_START		1
@@ -155,7 +156,7 @@ const char UN_STR_ERROR[] PROGMEM = "ERROR";
 #define UN_STEP_CONNECT	7
 #define UN_STEP_CHECK_CONNECT	8
 #define UN_STEP_SET_SEND	9
-#define UN_STEP_SEND_LOGIN		10
+#define UN_STEP_SEND_LOGIN	10
 #define UN_STEP_PRECONNECT	11
 #define UN_STEP_GAME_SPECIFY	12
 #define UN_STEP_REQ_RSVP	13
@@ -164,6 +165,7 @@ const char UN_STR_ERROR[] PROGMEM = "ERROR";
 #define UN_STEP_NO_MATCH	16
 #define UN_STEP_IN_MATCH	17
 #define UN_STEP_CHECK_READY	18
+#define UN_STEP_PLAYER_INFO	19
 
 //custom override states, to allow user implementations of RSVP and matchmaking handling
 #define UN_STEP_CUSTOM_RSVP	101
@@ -213,6 +215,9 @@ const char UN_STR_ERROR[] PROGMEM = "ERROR";
 #define UN_CMD_REQ_MATCH_SIMPLE	37//'%'
 #define UN_CMD_CHECK_MATCH_READY	38
 #define UN_CMD_SEND_MATCH_READY	39
+#define UN_CMD_PLAYER_INFO_SIMPLE	40
+
+#define UN_CMD_PAD_DATA_SIMPLE	60
 //TODO NEED TO SUPPORT NEW BAUD FORMAT IN EMULATOR BEFORE DOING THIS
 //#define UN_CUSTOM_BAUD_DIVISOR	30
 //const char UN_CUSTOM_BAUD_NUM[] PROGMEM = "57600";//the equivalent baud rate to the above divisor, in string form(for the AT command)
@@ -233,15 +238,17 @@ const char UN_STR_ERROR[] PROGMEM = "ERROR";
 
 // This system lets you use a small Tx buffer, which makes this RAM nearly free...
 volatile u16 uzenet_state;
-//volatile u8 uzenet_sync;
+volatile u8 uzenet_sync;
 volatile u8 uzenet_error;
 volatile u8 uzenet_step,uzenet_wait,uzenet_local_tick;
-volatile u8 uzenet_remote_tick[MAX_UZENET_PLAYERS];
+volatile u8 uzenet_remote_tick;//[MAX_UZENET_PLAYERS];
 volatile u8 uzenet_local_player;
 u16 uzenet_spir_rx_pos, uzenet_spir_tx_pos;
 u16 uzenet_spir_rx_len;
 u8 uzenet_spir_tx_len;
 
+u8 uzenet_last_rx;
+u8 uzenet_crc;//use during critical sections
 
 void Uzenet_SpiRamTxS(char *s){
 	SpiRamSeqWriteStart(0, (u16)(uzenet_spir_tx_pos+uzenet_spir_tx_len));
@@ -355,18 +362,20 @@ void Uzenet_SpiRamTxFlush(u8 iu){//don't call this until you are done transmitti
 int total_sent = 0;
 void Uzenet_Update(){//designed to work with a *MINIMUM* 16 bytes Rx, and 2 byte Tx at 9600 baud. Faster speeds will need a larger Rx buffer for reliability, Tx can remain low
 
-PrintInt(8,0,uzenet_step,1);
-PrintInt(8,1,uzenet_spir_rx_pos-UN_SPIR_BASE_RX,1);
-PrintInt(8,2,uzenet_spir_rx_len,1);
-PrintInt(16,0,total_sent,1);
-PrintInt(16,1,uzenet_spir_tx_len,1);
+//PrintInt(8,0,uzenet_step,1);
+//PrintInt(8,1,uzenet_spir_rx_pos-UN_SPIR_BASE_RX,1);
+//PrintInt(8,2,uzenet_spir_rx_len,1);
+//PrintInt(16,0,total_sent,1);
+//PrintInt(16,1,uzenet_spir_tx_len,1);
+//PrintInt(16,2,uzenet_last_rx,1);
 
 	u8 unread = UartUnreadCount();
 
 	if(unread){//still data left? must have found the match start, store the rest of the data to search through
 		SpiRamSeqWriteStart(0, (u16)(uzenet_spir_rx_pos+uzenet_spir_rx_len));
 		while(unread--){
-			SpiRamSeqWriteU8(UartReadChar());
+uzenet_last_rx = UartReadChar();
+SpiRamSeqWriteU8(uzenet_last_rx);			//SpiRamSeqWriteU8(UartReadChar());
 			uzenet_spir_rx_len++;
 		}
 		SpiRamSeqWriteEnd();
@@ -384,7 +393,8 @@ PrintInt(16,1,uzenet_spir_tx_len,1);
 		SpiRamSeqReadEnd();
 	}
 
-	ReadControllers();
+	if(uzenet_step < UN_STEP_PLAYING)
+		ReadControllers();
 
 	if(uzenet_error & UN_ERROR_CRITICAL){
 		Uzenet_SpiRamRxFlush(1);
@@ -395,8 +405,15 @@ PrintInt(16,1,uzenet_spir_tx_len,1);
 	uzenet_local_tick++;//always increment timer, used for multiple things
 
 	if(uzenet_step >= UN_STEP_PLAYING){//intercepting joypad input to perform networking transparently
-Print(6,14,PSTR("OH YEAH IT WORKS!!!!"));//while(1);
-//		return;
+//Print(6,14,PSTR("OH YEAH IT WORKS!!!!"));//while(1);
+Print(0,2,PSTR("I AM"));PrintHexByte(5,2,uzenet_local_player);
+Print(0,3,PSTR("LOCAL TICK"));PrintHexByte(12,3,uzenet_local_tick);
+Print(0,4,PSTR("REMOTE TICK"));PrintHexByte(13,4,uzenet_remote_tick);
+		if(uzenet_state & UN_DO_SYNC){
+			while(!GetVsyncFlag());
+			return;
+		}
+		return;
 	}
 
 	if(uzenet_spir_tx_len)//still sending data, don't advance until we could actually output more
@@ -416,6 +433,7 @@ Print(6,14,PSTR("OH YEAH IT WORKS!!!!"));//while(1);
 		if(!(uzenet_state & UN_SPI_RAM_DETECTED) && SpiRamInit())//only do once per boot
 				uzenet_state |= UN_SPI_RAM_DETECTED;
 
+		uzenet_error = 0;//get rid of any errors, since the reset might fix things...
 		Uzenet_SpiRamRxFlush(1); Uzenet_SpiRamTxFlush(1);//eat any existing data(this might be a retry)
 		uzenet_step = UN_STEP_START;
 
@@ -560,18 +578,18 @@ Print(6,14,PSTR("OH YEAH IT WORKS!!!!"));//while(1);
 		if(c != -1){//done waiting on a response?
 			uzenet_state |= UN_SERVER_DETECTED;//then our login credentials are also verified good
 			if(c){//this will be a match number we should join(we will automatically be accepted, for a certain amount of time)
-//Print(10,10,PSTR("GOT MATCH!")); PrintHexByte(22,10,c);while(1);
+
 				uzenet_state |= UN_DETECTED_RSVP;
 				Uzenet_SpiRamTxB(UN_CMD_JOIN_MATCH);//server responds to this command...
 				Uzenet_SpiRamTxB(c);//...0 for success, otherwise an error code
 				uzenet_step = UN_STEP_CHECK_JOIN;
 			}else{//otherwise no RSVP, so just wait for further instruction from the program(like user selecting UZENET)
 				uzenet_step = UN_STEP_NO_MATCH;
-//Print(10,10,PSTR("GOT ZERO :( :("));while(1);
+
 			}
 
 		}else if(uzenet_local_tick > 120){//no response from the server or a connection issue, fall back to preconnection(this could mean our login password is bad, or just temporary Internet issues)
-//Print(20,19,PSTR("HACK"));while(1);
+
 			uzenet_error |= UN_ERROR_SERVER_TIMEOUT;
 			uzenet_step = UN_STEP_PRECONNECT;
 		}
@@ -608,35 +626,107 @@ uzenet_wait = 5;
 			}else//not looking for a match...sit here responding to "PING", until user code tells us to find an opponent...this will automatically let the server to sort by latency if there are multiple opponent options
 				uzenet_local_tick = 0;//...the design of this RSVP loop is intended to make the simplest possible implementation for menus/game state changes
 		}
-	}else if(uzenet_step == UN_STEP_CHECK_JOIN){//TODO a match is different than a room!
+	}else if(uzenet_step == UN_STEP_CHECK_JOIN){
 		s16 c = Uzenet_SpiRamRxB();
 		if(c != -1){//done waiting on a response?
-//Print(10,4,PSTR("JOIN"));PrintHexByte(16,4,c&0xFF); while(1);
-			if(c == 0){//success?
+			if(c){//match join was a success? then our player number is returned
+				uzenet_local_player = c-1;//Uzenet server starts counts at 1...for reasons
 				uzenet_step = UN_STEP_IN_MATCH;
-//Print(20,4,PSTR("OH YEAH OH YEAH"));while(1);
 			}else{//otherwise got some error code
 				uzenet_step = UN_STEP_NO_MATCH;
-//Print(20,4,PSTR("NOOOOOOOOOOOOOO"));while(1);
 			}
 		}else if(uzenet_local_tick > 120){
-//Print(20,4,PSTR("FAIL"));PrintHexByte(20,10,c);// while(1);
 			uzenet_error |= UN_ERROR_SERVER_TIMEOUT;
 			uzenet_step = UN_STEP_PRECONNECT;
 		}
 		//TODO A MATCH CAN BE JOIN BY MORE PLAYERS, UNTIL ALL PLAYERS SIGNAL MATCH START....ALLOWS 2 or more players easily
 #endif//UN_CUSTOM_MATCH_HANDLER
 	}else if(uzenet_step == UN_STEP_IN_MATCH){// waiting for the game to begin, signal we are ready(simple case)
-//Print(6,14,PSTR("GOT IN MATCH!!!!!!!!!!!!!"));while(1);
+
 		Uzenet_SpiRamTxB(UN_CMD_SEND_MATCH_READY);//let everyone know we are ready, at least...
-		uzenet_local_tick = 0;
+		Uzenet_SpiRamTxB(UN_CMD_CHECK_MATCH_READY);//see conditions are met to start playing(if yes, it means game is in motion, start syncing!)
 		uzenet_step = UN_STEP_CHECK_READY;
 		Uzenet_SpiRamRxFlush(1);//discard any previous data, we only care about the result of this query
 
 	}else if(uzenet_step == UN_STEP_CHECK_READY){
 
+		s16 c = Uzenet_SpiRamRxB();
+		if(c != -1){//done waiting on a response?
 
-	}
+			if(c == 1){//server signaled ready? then this signal is also a simple LFSR we can use(worst case 0b0000001 fixes itself in < 40 iterations)
+Print(10,10,PSTR("ACK ACK"));while(1);
+				GetPrngNumber(c);
+				for(u8 i=0;i<40;i++)//8 bit seed actually seems ok, in combination with random player "ready" wait frames
+					GetPrngNumber(0);
+
+				uzenet_step = UN_STEP_PLAYER_INFO;//UN_STEP_PLAYING;
+				Uzenet_SpiRamTxB(UN_CMD_PLAYER_INFO_SIMPLE);//server sends 4 fixed length, zero padded, concatenated names
+				uzenet_local_tick = 0;//use this as a timer
+				uzenet_remote_tick = 0;//use this as a byte counter
+			}else{//otherwise not ready, check again
+				uzenet_step = UN_STEP_IN_MATCH;
+				uzenet_wait = 30;
+			}
+		}else if(uzenet_local_tick > 120){
+
+			uzenet_error |= UN_ERROR_SERVER_TIMEOUT;
+			uzenet_step = UN_STEP_PRECONNECT;
+		}
+
+	}else if(uzenet_step == UN_STEP_PLAYER_INFO){//retrieve player names in a fixed length format(4*max length names, zero padded)
+
+		SpiRamSeqWriteStart(0,UN_PLAYER_INFO_BASE+uzenet_remote_tick);
+		do{
+			if(uzenet_remote_tick == (13*4)){//got all the name data(advanced games need to use a different method)
+				uzenet_remote_tick = 0;//reset our temp timer
+				uzenet_local_tick = 0;//reset our temp counter
+				uzenet_step = UN_STEP_PLAYING;
+				uzenet_state |= (UN_STATE_GOT_NAMES|UN_DO_SYNC);
+				uzenet_sync = 1;//each player will send an initial state to get rolling...
+				Uzenet_SpiRamTxB(UN_CMD_PAD_DATA_SIMPLE);//tell the server we are sending game data(we didn't read pads this tick, neither did they)
+				Uzenet_SpiRamTxP(PSTR("\x00\x00\x00"));//tick 0(default 2 bytes format) empty pad state(they will send the same to get us out of the first sync)
+				break;
+			}
+			s16 c = Uzenet_SpiRamRxB();
+			if(c == -1)
+				break;
+			SpiRamSeqWriteU8(c);
+			uzenet_local_tick = 0;//reset timer since we got data
+			uzenet_remote_tick++;
+		}while(1);
+		SpiRamSeqWriteEnd();
+
+		if(uzenet_local_tick > 120){
+
+			uzenet_error |= UN_ERROR_SERVER_TIMEOUT;
+			uzenet_step = UN_STEP_PRECONNECT;
+		}
+
+
+	}//else if(uzenet_step == UN_STEP_DO_SYNC){//wait until we have received remote input up to a certain point
+
+
+		
+
+	/*else if(uzenet_step == UN_STEP_GET_LFSR){//get the server LFSR(it was created the moment the match was, remote will get the same)
+
+		s16 c = Uzenet_SpiRamRxB();
+		if(c != -1){//done waiting on a response?
+			if(c == 1){//ready?
+				uzenet_step = UN_STEP_PLAYING;
+			//	Uzenet_SpiRamTxB(UN_CMD_GET_LFSR_SIMPLE);//get the first LFSR only(remote side will get the same number from the server)
+			//	Uzenet_SpiRamTxB(UN_CMD_GET_PLAYER_FLOW_SIMPLE);//allow player data to come to us(after we get the LFSR!)
+			}else{//otherwise not ready, check again
+				uzenet_step = UN_STEP_IN_MATCH;
+				uzenet_wait = 30;
+			}
+		}else if(uzenet_local_tick > 120){
+
+			uzenet_error |= UN_ERROR_SERVER_TIMEOUT;
+			uzenet_step = UN_STEP_PRECONNECT;
+		}
+
+	}*/
 }
 
 
