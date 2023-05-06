@@ -6,36 +6,13 @@ struct tetraminoStruct {
 
   };
 
-/*
-About this program:
--------------------
-
-The game's main complication is the "multi-tasking" aspect. 2 players (game fields)
-must play simultaneously, at there own speed, plus all the
-animations. To avoid using a RTOS or develop some complex task
-scheduler, a simpler approach was taken. A global "active field" variable
-"f" is used by all functions implicated in parallel execution. That
-way, both field code can be executed sequentially. A master loop call in turn
-both fields. A state machine enable to have "non-blocking" animations. That
-is, if player 1 "Tetris" animation is playing (and the next block is frozen), 
-player 2 continues playing, unnafected. 
-
-Concerning graphics, the main screen uses a special map, called the main map.
-Its a map the size of the VRAM (40x28) and is used with a special function
-called RestoreTile. When drawing a map data is copied from ROM to RAM, During
-gameplay a tetramino is drawn in RAM and overwrites the previous map data. To
-avoid needing more RAM to save previous image data, the RestoreTile function 
-restores a tile from its map at a specific (x,y) location.
-
-*/
-
 const struct tetraminoStruct tetraminos[] PROGMEM={
 
-	//Tetrimino: S
+	//Tetramino: S
 	{3,
 	{{0,1,1,
-	 1,1,0,
-	 0,0,0},
+	  1,1,0,
+	  0,0,0},
 
 	 {0,1,0,
 	  0,1,1,
@@ -50,7 +27,7 @@ const struct tetraminoStruct tetraminos[] PROGMEM={
 	  0,1,0}}
 	},
 
-	//J
+	//Tetramino: J
 	{3,
 
 	{{2,0,0,
@@ -70,8 +47,8 @@ const struct tetraminoStruct tetraminos[] PROGMEM={
 	  2,2,0}}
 	},
 
-	//Tetrimino: L
- 	{3,
+	//Tetramino: L
+	{3,
 	{{0,0,3,
 	 3,3,3,
 	 0,0,0},
@@ -89,10 +66,10 @@ const struct tetraminoStruct tetraminos[] PROGMEM={
 	  0,3,0}}
 	},
 
-	//Tetrimino: O
+	//Tetramino: O
 	{2,
 	{{4,4,
-	 4,4},
+	  4,4},
 
 	{4,4,
 	 4,4},
@@ -104,11 +81,11 @@ const struct tetraminoStruct tetraminos[] PROGMEM={
 	 4,4}}
 	},
 
-	//Tetrimino: T	
+	//Tetramino: T	
 	{3,
 	{{0,5,0,
-	 5,5,5,
-	 0,0,0},
+	  5,5,5,
+	  0,0,0},
 
 	 {0,5,0,
 	  0,5,5,
@@ -123,12 +100,12 @@ const struct tetraminoStruct tetraminos[] PROGMEM={
 	  0,5,0}}
 	},
 
-	//I
+	//Tetramino: I
 	{4,
-   {{0,0,0,0,
-	 6,6,6,6,
-	 0,0,0,0,
-	 0,0,0,0},
+	{{0,0,0,0,
+	  6,6,6,6,
+	  0,0,0,0,
+	  0,0,0,0},
 
 	{0,0,6,0,
 	 0,0,6,0,
@@ -148,7 +125,7 @@ const struct tetraminoStruct tetraminos[] PROGMEM={
 	},
 
 
-	//Tetrimino: Z
+	//Tetramino: Z
 	{3,
 	{{7,7,0,
 	 0,7,7,
@@ -166,22 +143,13 @@ const struct tetraminoStruct tetraminos[] PROGMEM={
 	  7,7,0,
 	  7,0,0}}
 	}
-	
-			
-
-
-  };
+};
 
 #define O_TETRAMINO 3
 #define T_TETRAMINO 4
 #define I_TRETRAMINO 5
 #define BG_TILE 21
 #define CURSOR_TILE 11
-
-#define LOCK_DELAY 15*2
-#define SOFT_DROP_DELAY 1*2
-#define ANIMATE_LOCK 1
-#define ANIMATE_NONE 0
 
 #define FIELD_HEIGHT 22
 #define FIELD_WIDTH 10
@@ -203,12 +171,29 @@ const struct tetraminoStruct tetraminos[] PROGMEM={
 #define MAX_AUTO_REPEAT_DELAY 12*2
 
 #define DEF_INTER_REPEAT_DELAY 1*2
-#define MIN_INTER_REPEAT_DELAY 1
+#define MIN_INTER_REPEAT_DELAY 0
 #define MAX_INTER_REPEAT_DELAY 6*2
- 
-#define DEF_START_LEVEL 10 //halved due to change in FAST_VSYNC...
+
+#define DEF_SOFT_DROP_DELAY (1*2)+1
+#define LOCK_DELAY (15*2)//60hz change
+
+#define DEF_START_LEVEL 10
 #define MIN_START_LEVEL 1
 #define MAX_START_LEVEL 30
+
+#define MAX_MP_ROTATIONS 15
+
+#define PREVIEW_X_P1	14
+#define PREVIEW_X_P2	22
+#define PREVIEW_Y	12
+
+#define HOLD_X_P1	PREVIEW_X_P1
+#define HOLD_X_P2	PREVIEW_X_P2
+#define HOLD_Y		PREVIEW_Y+9
+
+#define FIELD_LEFT_P1	2
+#define FIELD_LEFT_P2	28
+#define FIELD_TOP	4
 
 //declare custom assembly functions
 extern void RestoreTile(char x,char y);
@@ -246,7 +231,7 @@ u8 MainMenu(void);
 u8 OptionsMenu();
 void restoreFields(void);
 int ConnectMenu();
-
+void drawPreview(u8 p);
 void processAnimations(u8 f);
 
 const u8 sin_tablex[] PROGMEM = {
@@ -260,57 +245,51 @@ struct fieldStruct {
 	u8 currentState;
 	u8 subState;	
 	u8 lastClearCount;
-	u8 hardDroppped;
-	s8 nextBlock;
 	u8 currBlock;
 	s8 holdBlock;
-	s8 currBlockSize;
 	s8 currBlockX;
 	s8 currBlockY;
 	u8 currBlockRotation;
+	u8 rotateCount;
 	s8 ghostBlockY;
-	s8 left;
-	s8 right;
-	s8 bottom;
-	s8 top;
 	u8 locking;
 	s8 currLockDelay;
 	s8 gravity;			//the delay in frames between blocks moving down
 	s8 currGravity;
-	unsigned long score;
-	unsigned int lines;
-	unsigned int nextLevel;
-	u8 height;
+	u32 score;
+	u16 lines;
+	u16 nextLevel;
+	//u8 height;
 	u8 level;
 	u8 startLevel;
 	u8 gameOver;
 	u8 canHold;
-	unsigned int lastButtons;
-	unsigned int currButtons;
+	u16 lastButtons;
+	u16 currButtons;
 	u8 autoRepeatDelay;
 	u8 interRepeatDelay;
 	u8 maxAutoRepeatDelay;
 	u8 maxInterRepeatDelay;
 	u8 softDropDelay;
+	u8 softDropLimit;
 	u8 kickUp;
 	u8 noGhostBlock;
 	u8 backToBack;
 	u8 garbageQueue;
 	u8 surface[22][10];
-	u8 nextBlockPosX;
-	u8 nextBlockPosY;
-	u8 holdBlockPosX;
-	u8 holdBlockPosY;
 	u8 bag[7];			//the random bag of pieces
+	u8 nextBag[7];			//the next bag we are pre-calculating
 	u8 bagPos;
-	u8 tSpin;		   //t-spin detected on last lock 1,2,3 (or zero=no t-spin)
+	u8 tSpin;			//t-spin detected on last lock 1,2,3 (or zero=no t-spin)
 	u8 lastOpIsRotation;		//true if last move was a rotation (gravity, or move -> 0)
 	u8 tSpinAnimFrame;
 	u8 backToBackAnimFrame;
 	u8 tetrisAnimFrame;
 	u8 lastHole;
-	unsigned int padState;
-	unsigned int lastPadState;
+	u16 lfsr;
+	u16 padState;
+	u16 lastPadState;
+	u8 wins;
 };
 
 struct fieldStruct fields[2];
@@ -335,9 +314,5 @@ const char strYouLose[] PROGMEM ="YOU LOSE!!";
 
 //Global config
 u8 vsMode;
-u8 restart;
-
-//u8 f=0; 			//active field
-
 u8 songNo=0;	//default song
 #endif

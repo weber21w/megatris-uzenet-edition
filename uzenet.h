@@ -315,6 +315,7 @@ u8 Uzenet_Sync(u8 s){
 u8 Uzenet_GameError(){
 	if(uzenet_step >= UN_STEP_PLAYING)
 		return uzenet_error;
+	return 0;
 }
 
 void Uzenet_FindOpponent(){
@@ -393,7 +394,7 @@ SpiRamSeqWriteU8(uzenet_last_rx);			//SpiRamSeqWriteU8(UartReadChar());
 		SpiRamSeqReadEnd();
 	}
 
-	if(uzenet_step < UN_STEP_PLAYING)
+//	if(uzenet_step < UN_STEP_PLAYING)
 		ReadControllers();
 
 	if(uzenet_error & UN_ERROR_CRITICAL){
@@ -406,13 +407,13 @@ SpiRamSeqWriteU8(uzenet_last_rx);			//SpiRamSeqWriteU8(UartReadChar());
 
 	if(uzenet_step >= UN_STEP_PLAYING){//intercepting joypad input to perform networking transparently
 //Print(6,14,PSTR("OH YEAH IT WORKS!!!!"));//while(1);
-Print(0,2,PSTR("I AM"));PrintHexByte(5,2,uzenet_local_player);
-Print(0,3,PSTR("LOCAL TICK"));PrintHexByte(12,3,uzenet_local_tick);
-Print(0,4,PSTR("REMOTE TICK"));PrintHexByte(13,4,uzenet_remote_tick);
-		if(uzenet_state & UN_DO_SYNC){
-			while(!GetVsyncFlag());
-			return;
-		}
+Print(0,0,PSTR("I AM"));PrintHexByte(5,2,uzenet_local_player);
+Print(0,1,PSTR("LOCAL TICK"));PrintHexByte(12,3,uzenet_local_tick);
+Print(0,2,PSTR("REMOTE TICK"));PrintHexByte(13,4,uzenet_remote_tick);
+//		if(uzenet_state & UN_DO_SYNC){
+//			while(!GetVsyncFlag());
+//			return;
+//		}
 		return;
 	}
 
@@ -604,7 +605,7 @@ Print(0,4,PSTR("REMOTE TICK"));PrintHexByte(13,4,uzenet_remote_tick);
 #ifdef UN_CUSTOM_MATCH_HANDLER
 		Uzenet_CustomMatchHandler();//this user function is responsible for handling uzenet_step = UN_PLAYING_GAME
 #else
-Print(6,14,PSTR("NO MATCH!!!!"));
+//Print(6,14,PSTR("NO MATCH!!!!"));
 		if(Uzenet_SpiRamRxSearchP(UN_STR_ERROR) || Uzenet_SpiRamRxSearchP(PSTR("CLOSED"))){//something broke...user code can detect this and drop out of menu
 //while(1);Print(10,20,PSTR("FOUND ERROR"));while(1);
 			uzenet_error |= UN_ERROR_CONNECT_FAILED;//we could recover from this by reconnecting and trying again
@@ -645,6 +646,7 @@ uzenet_wait = 5;
 
 		Uzenet_SpiRamTxB(UN_CMD_SEND_MATCH_READY);//let everyone know we are ready, at least...
 		Uzenet_SpiRamTxB(UN_CMD_CHECK_MATCH_READY);//see conditions are met to start playing(if yes, it means game is in motion, start syncing!)
+		uzenet_local_tick = 0;//use this as a timer for the next step
 		uzenet_step = UN_STEP_CHECK_READY;
 		Uzenet_SpiRamRxFlush(1);//discard any previous data, we only care about the result of this query
 
@@ -653,8 +655,8 @@ uzenet_wait = 5;
 		s16 c = Uzenet_SpiRamRxB();
 		if(c != -1){//done waiting on a response?
 
-			if(c == 1){//server signaled ready? then this signal is also a simple LFSR we can use(worst case 0b0000001 fixes itself in < 40 iterations)
-Print(10,10,PSTR("ACK ACK"));while(1);
+			if(c>0){//server signaled ready? then this signal is also a simple LFSR we can use(worst case 0b0000001 fixes itself in < 40 iterations)
+
 				GetPrngNumber(c);
 				for(u8 i=0;i<40;i++)//8 bit seed actually seems ok, in combination with random player "ready" wait frames
 					GetPrngNumber(0);
@@ -664,6 +666,7 @@ Print(10,10,PSTR("ACK ACK"));while(1);
 				uzenet_local_tick = 0;//use this as a timer
 				uzenet_remote_tick = 0;//use this as a byte counter
 			}else{//otherwise not ready, check again
+
 				uzenet_step = UN_STEP_IN_MATCH;
 				uzenet_wait = 30;
 			}
