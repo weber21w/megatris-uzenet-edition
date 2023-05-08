@@ -124,17 +124,19 @@ const char UN_STR_ERROR[] PROGMEM = "ERROR";
 #define UN_STATE_GOT_NAMES	512
 
 #define UN_DO_SYNC		1024
-
+#define UN_STATE_PLAYING	2048
 
 
 #define UN_ERROR_TRANSIENT		1//a(possibly) temporary error, which might have been caused by temporary network conditions
 #define UN_ERROR_CONNECT_FAILED	2//possibly a transient error
 #define UN_ERROR_SERVER_TIMEOUT	4//possibly a transient error
+#define UN_ERROR_GAME_FAILED		64
 #define UN_ERROR_CRITICAL		128//an error that wont be fixed by resetting and trying again
 
 #define UN_MATCH_RSVP_DETECTED 2//a pre-arranged match was detected, bypass the requirement for the user to manuall select UZENET option
 #define UN_MATCH_HAVE_NAMES	4//we have all the names of the players in the room?
 #define UN_MATCH_WAS_KICKED	8//we got kicked from the room somehow?
+
 
 
 #define UN_PASS_EEPROM_OFF	23//8 characters long
@@ -231,8 +233,8 @@ const char UN_STR_ERROR[] PROGMEM = "ERROR";
 
 
 
-
-#define UN_MAX_SYNC_WAIT 180
+#define UN_MAX_RUN_AHEAD	120
+#define UN_MAX_SYNC_WAIT	180
 
 #define MAX_UZENET_PLAYERS	2
 
@@ -243,9 +245,9 @@ volatile u8 uzenet_error;
 volatile u8 uzenet_step,uzenet_wait,uzenet_local_tick;
 volatile u8 uzenet_remote_tick;//[MAX_UZENET_PLAYERS];
 volatile u8 uzenet_local_player;
-u16 uzenet_spir_rx_pos, uzenet_spir_tx_pos;
-u16 uzenet_spir_rx_len;
-u8 uzenet_spir_tx_len;
+volatile u16 uzenet_spir_rx_pos, uzenet_spir_tx_pos;
+volatile u16 uzenet_spir_rx_len;
+volatile u8 uzenet_spir_tx_len;
 
 u8 uzenet_last_rx;
 u8 uzenet_crc;//use during critical sections
@@ -287,7 +289,25 @@ s16 Uzenet_SpiRamRxB(){//returns the earliest unread byte, control positioning w
 		return -1;
 	u8 b = SpiRamReadU8(0, (u16)(uzenet_spir_rx_pos++));
 	uzenet_spir_rx_len--;
+	if(!uzenet_spir_rx_len)
+		uzenet_spir_rx_pos = 0;
 	return b;
+}
+
+void DEBUGRXBUF(){
+	u8 x = 3;
+	u8 y = 0;
+	while(uzenet_spir_rx_len){
+		PrintHexByte(x,y++,Uzenet_SpiRamRxB()&127);
+		if(y > 24){
+			y = 0;
+			x += 4;
+		}
+	}
+	Uzenet_SpiRamRxFlush(1);
+	Uzenet_SpiRamTxFlush(1);
+	uzenet_state |= UN_ERROR_CRITICAL;
+	while(1);
 }
 
 void Uzenet_SetStep(u8 s){
@@ -359,7 +379,9 @@ void Uzenet_SpiRamTxFlush(u8 iu){//don't call this until you are done transmitti
 		InitUartTxBuffer();
 }
 
+u16 Uzenet_ReadJoypad(u8 p){
 
+}
 int total_sent = 0;
 void Uzenet_Update(){//designed to work with a *MINIMUM* 16 bytes Rx, and 2 byte Tx at 9600 baud. Faster speeds will need a larger Rx buffer for reliability, Tx can remain low
 
@@ -394,7 +416,7 @@ SpiRamSeqWriteU8(uzenet_last_rx);			//SpiRamSeqWriteU8(UartReadChar());
 		SpiRamSeqReadEnd();
 	}
 
-//	if(uzenet_step < UN_STEP_PLAYING)
+	//if(uzenet_step < UN_STEP_PLAYING)
 		ReadControllers();
 
 	if(uzenet_error & UN_ERROR_CRITICAL){
@@ -406,10 +428,8 @@ SpiRamSeqWriteU8(uzenet_last_rx);			//SpiRamSeqWriteU8(UartReadChar());
 	uzenet_local_tick++;//always increment timer, used for multiple things
 
 	if(uzenet_step >= UN_STEP_PLAYING){//intercepting joypad input to perform networking transparently
-//Print(6,14,PSTR("OH YEAH IT WORKS!!!!"));//while(1);
-Print(0,0,PSTR("I AM"));PrintHexByte(5,2,uzenet_local_player);
-Print(0,1,PSTR("LOCAL TICK"));PrintHexByte(12,3,uzenet_local_tick);
-Print(0,2,PSTR("REMOTE TICK"));PrintHexByte(13,4,uzenet_remote_tick);
+
+		
 //		if(uzenet_state & UN_DO_SYNC){
 //			while(!GetVsyncFlag());
 //			return;
@@ -459,8 +479,10 @@ Print(0,2,PSTR("REMOTE TICK"));PrintHexByte(13,4,uzenet_remote_tick);
 			Uzenet_SpiRamTxP(PSTR("ATE0\r\n"));//turn off echo(if we got this far, this should always work)
 			uzenet_step = UN_STEP_SET_BAUD;
 		}
-		if(uzenet_local_tick > 120)
+		if(uzenet_local_tick > 120){
 			uzenet_error |= UN_ERROR_CRITICAL;//at least this is useful, we built a list of what is present and what is not
+			uzenet_step = 0;
+		}
 
 	}else if(uzenet_step == UN_STEP_SET_BAUD){//change to the baud rate we want to use in game(if we got this far, this should always work)
 #ifdef UN_CUSTOM_BAUD_DIVISOR
@@ -660,11 +682,14 @@ uzenet_wait = 5;
 				GetPrngNumber(c);
 				for(u8 i=0;i<40;i++)//8 bit seed actually seems ok, in combination with random player "ready" wait frames
 					GetPrngNumber(0);
+//DEBUGRXBUF();
 
 				uzenet_step = UN_STEP_PLAYER_INFO;//UN_STEP_PLAYING;
 				Uzenet_SpiRamTxB(UN_CMD_PLAYER_INFO_SIMPLE);//server sends 4 fixed length, zero padded, concatenated names
 				uzenet_local_tick = 0;//use this as a timer
 				uzenet_remote_tick = 0;//use this as a byte counter
+
+				Uzenet_SpiRamRxFlush(1);
 			}else{//otherwise not ready, check again
 
 				uzenet_step = UN_STEP_IN_MATCH;
@@ -678,26 +703,31 @@ uzenet_wait = 5;
 
 	}else if(uzenet_step == UN_STEP_PLAYER_INFO){//retrieve player names in a fixed length format(4*max length names, zero padded)
 
-		SpiRamSeqWriteStart(0,UN_PLAYER_INFO_BASE+uzenet_remote_tick);
+		//SpiRamSeqWriteStart(0,(u16)(UN_PLAYER_INFO_BASE+uzenet_remote_tick));
 		do{
 			if(uzenet_remote_tick == (13*4)){//got all the name data(advanced games need to use a different method)
 				uzenet_remote_tick = 0;//reset our temp timer
 				uzenet_local_tick = 0;//reset our temp counter
 				uzenet_step = UN_STEP_PLAYING;
-				uzenet_state |= (UN_STATE_GOT_NAMES|UN_DO_SYNC);
+				uzenet_state |= (UN_STATE_GOT_NAMES|UN_DO_SYNC|UN_STATE_PLAYING);
 				uzenet_sync = 1;//each player will send an initial state to get rolling...
-				Uzenet_SpiRamTxB(UN_CMD_PAD_DATA_SIMPLE);//tell the server we are sending game data(we didn't read pads this tick, neither did they)
-				Uzenet_SpiRamTxP(PSTR("\x00\x00\x00"));//tick 0(default 2 bytes format) empty pad state(they will send the same to get us out of the first sync)
+			//	Uzenet_SpiRamTxB(UN_CMD_PAD_DATA_SIMPLE);//tell the server we are sending game data(we didn't read pads this tick, neither did they)
+			//	Uzenet_SpiRamTxP(PSTR("\x00\x00\x00"));//tick 0(default 2 bytes format) empty pad state(they will send the same to get us out of the first sync)
 				break;
 			}
 			s16 c = Uzenet_SpiRamRxB();
 			if(c == -1)
 				break;
-			SpiRamSeqWriteU8(c);
+			SpiRamWriteU8(0,(u16)(UN_PLAYER_INFO_BASE+uzenet_remote_tick++),c);
+		/*	if(uzenet_remote_tick < 20)
+				PrintByte(10,uzenet_remote_tick,c,1);
+			else{
+				uzenet_error|= UN_ERROR_CRITICAL;
+				while(1);
+			}*/
 			uzenet_local_tick = 0;//reset timer since we got data
-			uzenet_remote_tick++;
 		}while(1);
-		SpiRamSeqWriteEnd();
+		//SpiRamSeqWriteEnd();
 
 		if(uzenet_local_tick > 120){
 

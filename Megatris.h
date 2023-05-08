@@ -195,6 +195,15 @@ const struct tetraminoStruct tetraminos[] PROGMEM={
 #define FIELD_LEFT_P2	28
 #define FIELD_TOP	4
 
+#define GARBAGE_X_P1	13
+#define GARBAGE_X_P2	20
+#define GARBAGE_Y	24
+
+#define TETRIS_Y	GARBAGE_Y
+#define TSPIN_Y	TETRIS_Y
+#define B2B_Y		HOLD_Y
+
+
 //declare custom assembly functions
 extern void RestoreTile(char x,char y);
 extern void LoadMap(void);
@@ -232,7 +241,8 @@ u8 OptionsMenu();
 void restoreFields(void);
 int ConnectMenu();
 void drawPreview(u8 p);
-void processAnimations(u8 f);
+void processAnimations(u8 p);
+void drawPlayerNames();
 
 const u8 sin_tablex[] PROGMEM = {
 0x11,0x14,0x16,0x19,0x1c,0x1e,0x1f,0x20,0x21,0x21,0x20,0x1f,0x1e,0x1c,0x19,0x16,0x14,0x11,0xd,0xb,0x8,0x5,0x3,0x2,0x1,0x0,0x0,0x1,0x2,0x3,0x5,0x8,0xb,0xd,
@@ -289,6 +299,8 @@ struct fieldStruct {
 	u16 lfsr;
 	u16 padState;
 	u16 lastPadState;
+	u8 lastNetTick;
+	u8 hasKeyboard;
 	u8 wins;
 };
 
@@ -314,5 +326,6 @@ const char strYouLose[] PROGMEM ="YOU LOSE!!";
 
 //Global config
 u8 vsMode;
+u8 netMode;
 u8 songNo=0;	//default song
 #endif

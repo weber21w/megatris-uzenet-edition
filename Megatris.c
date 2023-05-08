@@ -38,10 +38,11 @@ void DoIntro(){//draw logo inline(lets Uzenet start working sooner...)
 	ClearVram();
 	WaitVsync(10 * (MODE1_FAST_VSYNC+1));
 
-	u16 r;
-	if((r = GetTrueRandomSeed()) == 0) //attempt to get a truly random number(watchdog drift based)
-		r = 0b1010110010011101; //sometimes it fails?
-	GetPrngNumber(r); //seed our random numbers(will be overrided by server for Uzenet games)
+	GetPrngNumber(GetTrueRandomSeed()); //attempt to get a truly random number(watchdog drift based)
+	if(GetPrngNumber(0) == 0)
+		GetPrngNumber(0b1010110010011101);
+
+	fields[0].lfsr = GetPrngNumber(0);
 }
 /*
 u8 VirtualKBMode;
@@ -77,6 +78,7 @@ int main(){
 	SetUserPostVsyncCallback(&Uzenet_Update);//this will handle the majority of Uzenet functionality behind the scenes
 	DoIntro();//inline version of kernel Logo
 	SetTileTable(tetrisTiles);
+
 	SetTileMap(map_main+2); //set the map to use for custom asm restore()
 
 	if(!(uzenet_state & UN_SPI_RAM_DETECTED) || !(uzenet_state & UN_ESP8266_DETECTED) || !(uzenet_state & UN_PASS_DETECTED)){
@@ -94,6 +96,7 @@ int main(){
 		Print(10,18,PSTR("VERIFY UZENET MODULE"));
 		Print(10,19,PSTR("AND RUN SETUP UTILITY"));
 		Print(9,21,PSTR("PRESS START TO CONTINUE"));
+		uzenet_error |= UN_ERROR_CRITICAL;//don't keep trying
 		TriggerFx(6,0xff,1);
 		while(1){
 			WaitVsync(1);
@@ -102,13 +105,7 @@ int main(){
 		}
 		while(ReadJoypad(0)&BTN_START);
 	}
-/*
-GetPrngNumber(0b00000001);
-for(u8 i=0;i<25;i++){
-PrintInt(9,i,GetPrngNumber(0),1);PrintInt(21,i,GetPrngNumber(0),1);PrintInt(33,i,GetPrngNumber(0),1);
-}
-while(1);
-*/
+
 #if CPU_PLAYER > 0
 	//SetRenderingParameters(110U, 32U);//(FIRST_RENDER_LINE+10,FRAME_LINES-10);
 #endif
@@ -140,47 +137,59 @@ GAME_TOP:
 			StartSongNo(songNo);
 GAME_NEW_MATCH:
 		while(1){//new match
+			if(uzenet_error & UN_ERROR_GAME_FAILED){
+				uzenet_error ^= UN_ERROR_GAME_FAILED;
+				break;//go back to title, user can select Uzenet to try again...
+			}
 			WaitVsync(1);
 			LoadMap();
 			initFields();	
 
-			SetTile(14,25,8);
-			SetTile(15,25,20);
-			PrintHexByte(16,25,0);
+			//SetTile(14,25,8);
+			//SetTile(15,25,20);
+			//PrintHexByte(16,25,0);
 
-			SetTile(22,25,8);
-			SetTile(23,25,20);
-			PrintHexByte(24,25,0);
+			//SetTile(22,25,8);
+			//SetTile(23,25,20);
+			//PrintHexByte(24,25,0);
 
 		//	if(uzenet_step < UN_STEP_PLAYING) //if uzenet, we already started the song to alert the players of connection
 		//		StartSongNo(songNo);
 
 			fields[0].currentState=0;
 			fields[1].currentState=0;
-
-			if(uzenet_state & UN_STATE_GOT_NAMES){//draw the network names if applicable
-				SpiRamSeqReadStart(0,UN_PLAYER_INFO_BASE);
-				for(u8 p=0;p<2;p++){
-					s8 fleft=p?FIELD_LEFT_P2:FIELD_LEFT_P1;
-					for(u8 i=0;i<13;i++){
-						u8 c = SpiRamSeqReadU8();
-						if(c == 0)
-							break;
-						PrintChar(fleft+i,FIELD_TOP,c);
-					}
-				}
-				SpiRamSeqReadEnd();
-//Print(fields[0].left,FIELD_TOP+1,PSTR("D3THADD3R"));
-			}
+u8 npos = 0;
+			//draw the network names if applicable
+			drawPlayerNames();
 
 			while(!fields[0].gameOver && !fields[1].gameOver){//on going match
 				WaitVsync(1); //syncronize gameplay on vsync (60 hz)
 
-				if(uzenet_error)
+				if(uzenet_error & UN_ERROR_GAME_FAILED)//a *new* network error?
 					break;
 
-				r = 0;
+				u8 net_wait = 0;
+				if(uzenet_state & UN_STATE_PLAYING){
+					u8 net_delta;
+					if(uzenet_local_tick > uzenet_remote_tick){
+					
+						if(uzenet_local_tick-uzenet_remote_tick > 120)
+							net_wait = 2;
+					}else{
+						if(uzenet_remote_tick-uzenet_local_tick > 120)					
+							net_wait = 2;
+					}
+				}
+				if(net_wait)
+					uzenet_local_tick--;//this was incremented behind the scenes, but we are skipping
+NET_CATCH_UP:
 				for(u8 i=0;i<2;i++){
+					if(net_wait && i == uzenet_local_player){//skip our tick, we have to get remote caught up
+Print(0,0,PSTR("SKIPPING:"));PrintHexByte(10,0,i);
+						net_wait--;
+						continue;
+					}
+
 					fields[i].lastButtons=fields[i].currButtons;
 					fields[i].currButtons=ReadJoypad(i);
 
@@ -189,7 +198,7 @@ GAME_NEW_MATCH:
 					runStateMachine(i);
 					processAnimations(i);
 					if((fields[i].currButtons&BTN_START) && !(fields[i].lastButtons&BTN_START)){
-						r = OptionsMenu();
+						u8 r = OptionsMenu();
 						if(r == 0)//resume
 							break;
 						FadeOut(1,1);
@@ -201,6 +210,8 @@ GAME_NEW_MATCH:
 						break;
 					}
 				}
+				if(net_wait)
+					goto NET_CATCH_UP;
 				
 			}//on going match
 		}//new match
@@ -432,11 +443,11 @@ u16 c;
 				Print(9,19,PSTR("PRESS A FOR BOT MATCH"));
 			}
 		}else{//some error happened
-			Print(4,14,PSTR("ERROR 0X"));
-			PrintHexByte(12,14,uzenet_error);
-			Print(4,16,PSTR("NETWORK ERROR OR MODULE FAILURE"));
-			Print(4,18,PSTR("CHECK INTERNET OR RUN SETUP TOOL"));
-			Print(4,20,PSTR("IF THIS PROBLEM PERSISTS"));
+			Print(4,16,PSTR("ERROR 0X"));
+			PrintHexByte(12,16,uzenet_error);
+			Print(4,18,PSTR("NETWORK ERROR OR MODULE FAILURE"));
+			Print(4,20,PSTR("CHECK INTERNET OR RUN SETUP TOOL"));
+			Print(4,22,PSTR("IF THIS PROBLEM PERSISTS"));
 		c = ReadJoypad(0);
 		if(c & BTN_B){
 			while(ReadJoypad(0) != 0); //wait for key release
@@ -448,7 +459,7 @@ u16 c;
 			return 0;//go back to main menu
 		}
 		}
-		Print(error?4:11,22,PSTR("PRESS B TO CANCEL       "));
+		Print(error?4:11,24,PSTR("PRESS B TO CANCEL       "));
 //+((anim3+1)>>3)%5
 //drawTetramino(pgm_read_byte(&sin_tablex[(anim2%sizeof(sin_tablex))]),pgm_read_byte(&sin_tabley[(anim2%sizeof(sin_tabley))]),0,anim1&3,0,0,0);
 //drawTetramino(pgm_read_byte(&sin_tablex[(anim1%sizeof(sin_tablex))]),pgm_read_byte(&sin_tabley[(anim3%sizeof(sin_tabley))]),1,anim2&3,0,0,0);
@@ -496,6 +507,7 @@ drawTetramino(pgm_read_byte(&sin_tablex[(anim3%sizeof(sin_tablex))]),pgm_read_by
 //	UartSendChar(UN_COMMAND_UPPERCASE);//send only uppercase strings
 //	UartSendChar(UN_GET_PLAYER_NAME1);
 	DrawMap(0,0,map_main);
+	drawPlayerNames();
 	while(1){//wait for each player to be ready(there might have been a long wait before finding an opponent...)
 		WaitVsync(2);
 
@@ -541,6 +553,7 @@ drawTetramino(pgm_read_byte(&sin_tablex[(anim3%sizeof(sin_tablex))]),pgm_read_by
 			TriggerFx(25,0xff,1);
 			ready2 = 1;
 		}
+		
 if(ready1)
 	ready2 = 1;
 		if(ready1)
@@ -568,7 +581,7 @@ u8 MainMenu(){
 		WaitVsync(1);
 		ClearVram();
 		DrawMap(3,3,map_title);
-
+		GetPrngNumber(0);
 //		if(uzenet_step >= UN_STEP_CHECK_READY)//Uzenet backend must have found an RSVP match(setup before the game was booted?)
 //			return 3;
 
@@ -614,132 +627,72 @@ u8 MainMenu(){
 
 
 
-void processAnimations(u8 f){ //animate non-locking stuff
-	u8 dx,frame;
-fields[f].backToBackAnimFrame = 75;
-fields[f].tSpinAnimFrame=78;
-fields[f].tetrisAnimFrame=81;
-	if(fields[f].backToBackAnimFrame>0){ //BACK-TO-BACK
-		if(f==0){
-			dx=14;		
-		}else{
-			dx=21;
-		}
-		u8 dy=16;
+void processAnimations(u8 p){ //animate non-locking stuff
 
-		switch(fields[f].backToBackAnimFrame){			
-			case 1:
-				restore(dx,dy,5,3);
-				break;
-			case 3:		
+	s8 dx=p?GARBAGE_X_P2:GARBAGE_X_P1;
+
+	if(fields[p].backToBackAnimFrame>1){ //BACK-TO-BACK
+
+		switch(fields[p].backToBackAnimFrame){			
+
+			case 3:
 			case 80:
-				DrawMap(dx,dy,map_anim_backtoback1);
+				DrawMap(dx,B2B_Y,map_anim_backtoback1);
 				break;
 			case 6:
-			case 77:			
-				DrawMap(dx,dy,map_anim_backtoback2);
+			case 77:	
+				DrawMap(dx,B2B_Y,map_anim_backtoback2);
 				break;
 			case 9:
-			case 74:			
-				DrawMap(dx,dy,map_anim_backtoback3);
+			case 74:	
+				DrawMap(dx,B2B_Y,map_anim_backtoback3);
 				break;
-
-
 		}	
-		fields[f].backToBackAnimFrame--;
+		fields[p].backToBackAnimFrame--;
 	}
 		
-	if(fields[f].tSpinAnimFrame>0){ //T-SPIN
-		if(f==0){
-			dx=14;		
-		}else{
-			dx=21;
-		}
-		u8 dy=19;
+	if(fields[p].tSpinAnimFrame>1){ //T-SPIN
 
-		switch(fields[f].tSpinAnimFrame){			
+		if(fields[p].tSpinAnimFrame==78){			
+
+				if(fields[p].lastClearCount==1){			
+					DrawMap(dx,TSPIN_Y,map_anim_single);
+				}else if(fields[p].lastClearCount==2){
+					DrawMap(dx,TSPIN_Y,map_anim_double);
+				}else{
+					DrawMap(dx,TSPIN_Y,map_anim_triple);
+				}
+		}
+		fields[p].tSpinAnimFrame--;
+	}
+
+	if(fields[p].tetrisAnimFrame>1){ //TETRIS
+											
+		switch((fields[p].tetrisAnimFrame&15)>>2){
+			case 0:
+				DrawMap(dx,TETRIS_Y,map_anim_tetris1);				
+				break;
 			case 1:
-				restore(dx,dy,7,4);
-				break;
-			case 3:			
-			case 90:
-				DrawMap(dx,dy,map_anim_spark1);
-				break;
-			case 6:
-			case 87:				
-				DrawMap(dx,dy,map_anim_spark2);
-				break;
-			case 9:
-			case 84:				
-				DrawMap(dx,dy,map_anim_spark3);
+				DrawMap(dx,TETRIS_Y,map_anim_tetris2);				
 				break;
 			case 2:
-			case 81:
-				DrawMap(dx,dy,map_anim_spark4);
-				break;			
-			case 78:
-				DrawMap(dx+1,dy+1,map_anim_tspin);
-				if(fields[f].lastClearCount==1){			
-					DrawMap(dx+1,dy+2,map_anim_single);
-				}else if(fields[f].lastClearCount==2){
-					DrawMap(dx+1,dy+2,map_anim_double);
-				}else if(fields[f].lastClearCount==3){
-					DrawMap(dx+1,dy+2,map_anim_triple);
-				}
-				
-		}	
-		fields[f].tSpinAnimFrame--;
+				DrawMap(dx,TETRIS_Y,map_anim_tetris3);				
+				break;
+			case 3:
+				DrawMap(dx,TETRIS_Y,map_anim_tetris2);				
+				break;
+		}				
+		fields[p].tetrisAnimFrame--;
 	}
 
-	frame=fields[f].tetrisAnimFrame;
-	if(frame>0){ //TETRIS
-		if(f==0){
-			dx=14;		
-		}else{
-			dx=21;
-		}
-		u8 dy=19;
-
-		switch(frame){	
-			case 1:
-				restore(dx,dy,7,4);
-				break;
-			case 2 ... 3:			
-			case 88 ... 90:
-				DrawMap(dx,dy,map_anim_spark1);
-				break;
-			case 4 ... 6:
-			case 85 ... 87:			
-				DrawMap(dx,dy,map_anim_spark2);
-				break;
-			case 9: //... 9:
-			case 82 ... 84:		
-				DrawMap(dx,dy,map_anim_spark3);
-				break;
-			case 10 ... 12:
-			case 79 ... 81:
-				DrawMap(dx,dy,map_anim_spark4);
-				break;			
-			
-			default:
-											
-				switch((frame&15)>>2){
-					case 0:
-						DrawMap(dx+1,dy+1,map_anim_tetris1);				
-						break;
-					case 1:
-						DrawMap(dx+1,dy+1,map_anim_tetris2);				
-						break;
-					case 2:
-						DrawMap(dx+1,dy+1,map_anim_tetris3);				
-						break;
-					case 3:
-						DrawMap(dx+1,dy+1,map_anim_tetris2);				
-						break;
-				}				
-		}	
-		fields[f].tetrisAnimFrame--;
+	if(fields[p].backToBackAnimFrame == 1){
+		restore(dx,B2B_Y,6,3);
+		drawTetramino(dx+1,HOLD_Y,fields[p].holdBlock,0,0,0,0);
 	}
+	if(fields[p].tetrisAnimFrame == 1 || fields[p].tSpinAnimFrame == 1)
+		restore(dx,TETRIS_Y,6,3);
+	else if(!fields[p].tetrisAnimFrame && !fields[p].tSpinAnimFrame)
+		PrintHexByte(dx+3,GARBAGE_Y+1,fields[p].garbageQueue);
 }
 
 
@@ -776,9 +729,6 @@ void runStateMachine(u8 p){
 			}
 			break;
 		case 4: //processing garbage
-
-//if(!Uzenet_Sync(0)){return;}
-
 			if(processGarbage(p)==1){
 				fields[p].subState=0;
 				fields[p].currentState=5;			
@@ -831,6 +781,7 @@ void initFields(void){
 		fields[x].tetrisAnimFrame=0;
 		fields[x].lastHole=0;
 	}
+	fields[0].lfsr = fields[1].lfsr = GetPrngNumber(0);
 
 	for(u8 y=0;y<FIELD_HEIGHT;y++){
 		for(u8 x=0;x<FIELD_WIDTH;x++){
@@ -965,28 +916,6 @@ void drawPreview(u8 p){
 	if(p && !vsMode)
 		return;
 	u8 next1,next2,next3;//get 3 preview pieces
-	//if(fields[p].bagPos < 6)
-	//	next1=fields[p].bag[fields[p].bagPos];
-for(u8 i=0;i<7;i++)
-SetTile(FIELD_LEFT_P2+1,FIELD_TOP+2+i,0);
-
-PrintHexByte(FIELD_LEFT_P2+1,FIELD_TOP+2+fields[0].bagPos,0);
-
-PrintHexByte(FIELD_LEFT_P2+3,FIELD_TOP+2,fields[0].bag[0]);
-PrintHexByte(FIELD_LEFT_P2+3,FIELD_TOP+3,fields[0].bag[1]);
-PrintHexByte(FIELD_LEFT_P2+3,FIELD_TOP+4,fields[0].bag[2]);
-PrintHexByte(FIELD_LEFT_P2+3,FIELD_TOP+5,fields[0].bag[3]);
-PrintHexByte(FIELD_LEFT_P2+3,FIELD_TOP+6,fields[0].bag[4]);
-PrintHexByte(FIELD_LEFT_P2+3,FIELD_TOP+7,fields[0].bag[5]);
-PrintHexByte(FIELD_LEFT_P2+3,FIELD_TOP+8,fields[0].bag[6]);
-
-PrintHexByte(FIELD_LEFT_P2+8,FIELD_TOP+2,fields[0].nextBag[0]);
-PrintHexByte(FIELD_LEFT_P2+8,FIELD_TOP+3,fields[0].nextBag[1]);
-PrintHexByte(FIELD_LEFT_P2+8,FIELD_TOP+4,fields[0].nextBag[2]);
-PrintHexByte(FIELD_LEFT_P2+8,FIELD_TOP+5,fields[0].nextBag[3]);
-PrintHexByte(FIELD_LEFT_P2+8,FIELD_TOP+6,fields[0].nextBag[4]);
-PrintHexByte(FIELD_LEFT_P2+8,FIELD_TOP+7,fields[0].nextBag[5]);
-PrintHexByte(FIELD_LEFT_P2+8,FIELD_TOP+8,fields[0].nextBag[6]);
 
 	if(fields[p].bagPos < 4){
 		next1=fields[p].bag[fields[p].bagPos+0];
@@ -1019,18 +948,17 @@ void issueNewBlock(u8 p){
 	if(fields[p].gameOver || (p && !vsMode))
 		return;
 
-	//reworked this to be faster on a per tick basis(though more cycles over the course of the bag)to avoid a weird crash?
-	//should also make sure only 1 of each Tetramino per bag appears, to match Tetris DS
+	//reworked this to be faster on the worst case, also guarantees 1 of each Tetramino per bag to match Tetris DS
 	GetPrngNumber(fields[p].lfsr);//get the individual player's LFSR(this simplifies net code)
 	fields[p].currBlock=fields[p].bag[fields[p].bagPos++];//get the next precalculated piece we are sending out
-	if(fields[p].bagPos>6){//end of bag? copy over the entire nextBag we have been pre-calculating
+	if(fields[p].bagPos>6){//end of bag? copy over the entire nextBag we precalculated
 		for(u8 i=0;i<7;i++){
 			fields[p].bag[i]=fields[p].nextBag[i];
-			fields[p].nextBag[i]=i;//we will shuffle this, which is hopefully a more predictable worse case scenario
+			fields[p].nextBag[i]=i;//we will shuffle this
 		}
 		fields[p].bagPos=0;
 
-		for(u8 i=0;i<2;i++){//do 14 random swaps on the nextBag
+		for(u8 i=0;i<2;i++){//do 14 random swaps, we wont get duplicates in the nextBag and the time is fixed
 			for(u8 j=0;j<7;j++){
 				u8 t = fields[p].nextBag[j];
 				u8 r = GetPrngNumber(0)%7;
@@ -1040,7 +968,7 @@ void issueNewBlock(u8 p){
 		}
 
 	}
-	fields[p].lfsr=GetPrngNumber(0);//save new individual LFSR(simplifies net code)
+	fields[p].lfsr=GetPrngNumber(0);//save new individual LFSR(separateion simplifies net code)
 
 	fields[p].currBlockX=3;
 	fields[p].currBlockY=0;
@@ -1051,8 +979,7 @@ void issueNewBlock(u8 p){
 
 	drawPreview(p);
 
-	//check if game over
-	if(!moveBlock(p, fields[p].currBlockX,fields[p].currBlockY))
+	if(!moveBlock(p, fields[p].currBlockX,fields[p].currBlockY))//game over?
 		doGameOver(p);
 }
 
@@ -1066,7 +993,8 @@ void updateGhostPiece(u8 p, u8 restore){ //this is an expensive function(up to 1
 
 		s16 y=fields[p].currBlockY;
 		while(1){
-			if(!fitCheck(p,fields[p].currBlockX,y,fields[p].currBlock,fields[p].currBlockRotation)) break;
+			if(!fitCheck(p,fields[p].currBlockX,y,fields[p].currBlock,fields[p].currBlockRotation))
+				break;
 			y++;
 		}
 
@@ -1079,7 +1007,8 @@ void hardDrop(u8 p){
 
 	s16 y=fields[p].currBlockY;
 	while(1){
-		if(!fitCheck(p,fields[p].currBlockX,y,fields[p].currBlock,fields[p].currBlockRotation)) break;
+		if(!fitCheck(p,fields[p].currBlockX,y,fields[p].currBlock,fields[p].currBlockRotation))
+			break;
 		y++;
 	}
 	
@@ -1113,9 +1042,6 @@ void hold(u8 p){
 			issueNewBlock(p);
 			updateGhostPiece(p,0);	
 		}else{
-			//swap the hold block and current block
-			drawTetramino(hx,HOLD_Y,fields[p].holdBlock,0,0,1,0);
-			drawTetramino(hx,HOLD_Y,fields[p].currBlock,0,0,0,0);
 
 			s16 temp=fields[p].currBlock;
 			fields[p].currBlock=fields[p].holdBlock;
@@ -1142,6 +1068,7 @@ void hold(u8 p){
 
 
 u8 processControls(u8 p){
+
 	s8 dispX=0,dispY=0;
 
 	//process hard drop
@@ -1359,6 +1286,7 @@ u8 lineFull(u8 p, s8 y){
 
 
 u8 animField(u8 p){ //animate the cleared lines
+
 	u8 y,size,tile,temp;
 
 	size=pgm_read_byte(&(tetraminos[fields[p].currBlock].size));
@@ -1366,7 +1294,7 @@ u8 animField(u8 p){ //animate the cleared lines
 	if(size+fields[p].currBlockY>FIELD_HEIGHT){
 		size=FIELD_HEIGHT-fields[p].currBlockY;
 	}
-	
+
 	s8 fleft=p?FIELD_LEFT_P2:FIELD_LEFT_P1;
 	switch(fields[p].subState){
 		
@@ -1414,7 +1342,6 @@ u8 animField(u8 p){ //animate the cleared lines
 				tile=22+(fields[p].subState/2);
 				
 			}
-			
 
 			for(y=0;y<size;y++){
 				if(lineFull(p,fields[p].currBlockY+y)){		
@@ -1476,7 +1403,6 @@ u8 updateField(u8 p){
 
 				}
 
-
 		}else if(fields[p].subState<=clearCount){
 				//move rest of field down
 				copyFieldLines(p,fields[p].subState-1,fields[p].subState,fields[p].currBlockY);
@@ -1530,8 +1456,6 @@ u8 updateField(u8 p){
 					}
 						fields[1].garbageQueue+=garbageLines;
 				}
-				PrintHexByte(16,25,fields[0].garbageQueue);
-				PrintHexByte(24,25,fields[1].garbageQueue);
 			}
 
 			//update score, lines, etc
@@ -1557,7 +1481,6 @@ u8 updateField(u8 p){
 					fields[p].backToBack=0;						
 				}
 
-				//fields[p].score+=(fields[p].level*fields[p].height)*bonus;
 				fields[p].score+=(fields[p].level*1)*bonus;
 
 				if(fields[p].score>999999)
@@ -1578,14 +1501,7 @@ u8 updateField(u8 p){
 	}else{
 		fields[p].tSpin=0;
 		return 1;
-	}
-
-	//print scores, lines,etc
-//	u8 x = p?27:19;
-
-//	PrintLong(x,18,fields[p].lines);
-//	PrintLong(x,21,fields[p].level);
-//	PrintLong(x,24,fields[p].score);	
+	}	
 
 	fields[p].subState++;
 	return 0;
@@ -1646,7 +1562,7 @@ void fillFieldLine(u8 p, s8 y,u8 tile){
 
 
 void doGameOver(u8 p){
-//	u8 p2=(p^1);
+
 	if(fields[p].gameOver || fields[!p].gameOver)
 		return;
 
@@ -1791,12 +1707,13 @@ void drawTetramino(s8 x,s8 y,s8 tetramino,s8 rotation,s8 forceTile,u8 restore,u8
 
 
 u8 processGarbage(u8 p){
-	s8 fleft=p?FIELD_LEFT_P2:FIELD_LEFT_P1;
-	if(fields[p].garbageQueue>0){
-		s8 rs,rd;
 
-		rs=1;
-		rd=0;
+	s8 fleft=p?FIELD_LEFT_P2:FIELD_LEFT_P1;
+
+	if(fields[p].garbageQueue>0){
+
+		s8 rs=1;
+		s8 rd=0;
 
 		for(u8 y=0;y<(FIELD_HEIGHT-1);y++){ //move field up
 			for(u8 x=0;x<10;x++){
@@ -1841,22 +1758,39 @@ u8 processGarbage(u8 p){
 
 		fields[p].garbageQueue--;
 
-		if(fields[p].garbageQueue==0){
+		if(fields[p].garbageQueue==0)
 			return 1;
-		}
 
-
-	}else{	
-		PrintHexByte(16,25,fields[0].garbageQueue);
-		PrintHexByte(24,25,fields[1].garbageQueue);
+	}else
 		return 1;
-	}
-	
+
 	fields[p].subState++;
 	return 0;
+
 }
 
 
+void drawPlayerNames(){
+	if(!(uzenet_state & UN_STATE_GOT_NAMES) || uzenet_error)
+		return;
+	SpiRamSeqReadStart(0,UN_PLAYER_INFO_BASE);
+	for(u8 p=0;p<2;p++){
+		s8 fleft=p?FIELD_LEFT_P2:FIELD_LEFT_P1;
+		u8 skip = 0;
+		for(u8 i=0;i<13;i++){
+			u8 c = SpiRamSeqReadU8();
+			if(skip || c == 0){
+				skip = 1;
+				continue;
+			}
+			SetFont(fleft+i,FIELD_TOP+1,c-32);
+		}
+	}
+	SpiRamSeqReadEnd();
+}
 #if CPU_PLAYER > 0
+void cpuThink(){
 
+
+}
 #endif
