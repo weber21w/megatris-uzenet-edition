@@ -78,7 +78,6 @@ int main(){
 	SetUserPostVsyncCallback(&Uzenet_Update);//this will handle the majority of Uzenet functionality behind the scenes
 	DoIntro();//inline version of kernel Logo
 	SetTileTable(tetrisTiles);
-
 	SetTileMap(map_main+2); //set the map to use for custom asm restore()
 
 	if(!(uzenet_state & UN_SPI_RAM_DETECTED) || !(uzenet_state & UN_ESP8266_DETECTED) || !(uzenet_state & UN_PASS_DETECTED)){
@@ -106,6 +105,7 @@ int main(){
 		while(ReadJoypad(0)&BTN_START);
 	}
 
+	fields[0].songNo = 1;
 #if CPU_PLAYER > 0
 	//SetRenderingParameters(110U, 32U);//(FIRST_RENDER_LINE+10,FRAME_LINES-10);
 #endif
@@ -118,6 +118,7 @@ int main(){
 
 	u8 r;
 GAME_TOP:
+	StopSong();
 	r = MainMenu();
 
 	if(r == 0)//single player
@@ -131,11 +132,8 @@ GAME_TOP:
 
 	fields[0].wins = fields[1].wins = 0;
 	while(1){
-		if(IsSongPlaying())
-			ResumeSong();
-		else
-			StartSongNo(songNo);
 GAME_NEW_MATCH:
+		TriggerMusic();
 		while(1){//new match
 			if(uzenet_error & UN_ERROR_GAME_FAILED){
 				uzenet_error ^= UN_ERROR_GAME_FAILED;
@@ -154,7 +152,7 @@ GAME_NEW_MATCH:
 			//PrintHexByte(24,25,0);
 
 		//	if(uzenet_step < UN_STEP_PLAYING) //if uzenet, we already started the song to alert the players of connection
-		//		StartSongNo(songNo);
+		//		TriggerMusic();
 
 			fields[0].currentState=0;
 			fields[1].currentState=0;
@@ -183,15 +181,21 @@ u8 npos = 0;
 				if(net_wait)
 					uzenet_local_tick--;//this was incremented behind the scenes, but we are skipping
 NET_CATCH_UP:
+		//		u8 doubleTick = 0;
 				for(u8 i=0;i<2;i++){
 					if(net_wait && i == uzenet_local_player){//skip our tick, we have to get remote caught up
-Print(0,0,PSTR("SKIPPING:"));PrintHexByte(10,0,i);
+//Print(0,0,PSTR("SKIPPING:"));PrintHexByte(10,0,i);
+						DrawMap(i?HOLD_X_P1-1:HOLD_X_P2-1,HOLD_Y,map_lag);
 						net_wait--;
 						continue;
 					}
 
+					u16 pad = Uzenet_ReadJoypad(i);
+					if(pad == 0xFFFF)//no net data? skip this tick...
+						continue;
+
 					fields[i].lastButtons=fields[i].currButtons;
-					fields[i].currButtons=ReadJoypad(i);
+					fields[i].currButtons=Uzenet_ReadJoypad(i);
 
 					if(i == 1 && !vsMode)
 						break;
@@ -222,11 +226,12 @@ Print(0,0,PSTR("SKIPPING:"));PrintHexByte(10,0,i);
 
 
 
-void StartSongNo(u8 songNo){
+void TriggerMusic(){
 
-	switch(songNo){
-		case 0: StartSong(song_tetrisnt); break;				
-		case 1: StartSong(song_korobeiniki); break;	
+	switch(fields[uzenet_local_player].songNo){
+		case 0: StopSong();break;
+		case 1: StartSong(song_tetrisnt); break;				
+		case 2: StartSong(song_korobeiniki); break;	
 	}
 }
 
@@ -254,10 +259,10 @@ u8 OptionsMenu(){
 	}
 
 //	goto FIRST_DRAW; //avoid taking too long before field is overwritten...
-Print(0,0,PSTR("1P>ALL YOUR BASE ARE BELONG TO US!!"));
-Print(0,1,PSTR("FOR GREAT JUSTICE! MUAHAHA!"));
-Print(0,3,PSTR("2P>WHAT YOU SAY?! OH NO HE SET US U"));
-Print(0,4,PSTR("P THE BOMB. MAKE YOUR TIME."));
+//Print(0,0,PSTR("1P>MUAHAHA I ALMOST HAD YOU!!"));
+//Print(0,1,PSTR("ALSO TYPE MESSAGES OUT..WITHOUT A SWITCH"));
+//Print(0,3,PSTR("2P>..."));
+//Print(0,4,PSTR("SMALL SPACE, IS IT WORTH THE TROUBLE?"));
 	while(1){
 		u8 menuSfx = 0;
 		WaitVsync(1);
@@ -266,7 +271,7 @@ Print(0,4,PSTR("P THE BOMB. MAKE YOUR TIME."));
 				break;
 
 			fields[i].lastButtons=fields[i].currButtons;
-			fields[i].currButtons=ReadJoypad(i);
+			fields[i].currButtons=Uzenet_ReadJoypad(i);
 		
 			if((fields[i].currButtons&(BTN_START|BTN_A|BTN_B)) && !(fields[i].lastButtons&(BTN_START|BTN_A|BTN_B))){
 			
@@ -274,12 +279,13 @@ Print(0,4,PSTR("P THE BOMB. MAKE YOUR TIME."));
 					breakout=1;
 					break;
 				}else if(option[i]==1){//restart
-					if(vsMode)
+					if(vsMode && fields[!i].wins < 255)
 						fields[!i].wins++;
 					breakout=2;
 					StopSong();
 					break;
 				}else if(option[i]==2){//quit
+					uzenet_step = UN_STEP_QUIT_GAME;
 					breakout=3;
 					break;
 				}else if(option[i]==3){//song
@@ -289,18 +295,20 @@ Print(0,4,PSTR("P THE BOMB. MAKE YOUR TIME."));
 						if(IsSongPlaying()){
 							StopSong();
 						}else{
-							StartSongNo(songNo);
+							TriggerMusic();
 						}
 					}
 				}
 			}
 
-			if((fields[i].currButtons&BTN_LEFT) && !(fields[i].lastButtons&BTN_LEFT) && option[i]<5)
-				menuSfx=1;
+			//if((fields[i].currButtons&BTN_LEFT) && !(fields[i].lastButtons&BTN_LEFT) && option[i]<5)
+			//	menuSfx=1;
 
 			if((fields[i].currButtons&BTN_LEFT) && !(fields[i].lastButtons&BTN_LEFT)){
-				if((option[i]==3 && songNo>0) && (uzenet_step < UN_STEP_PLAYING || i == uzenet_local_player)){
-					songNo--;
+				if(option[i]==3 && fields[i].songNo>0){
+					fields[i].songNo--;
+					if(uzenet_step < UN_STEP_PLAYING)
+						fields[!i].songNo = fields[i].songNo;
 				}else if(option[i]==4){
 					fields[i].noGhostBlock=!fields[i].noGhostBlock;
 				}else if(option[i]==5 && fields[i].startLevel>0){
@@ -309,11 +317,13 @@ Print(0,4,PSTR("P THE BOMB. MAKE YOUR TIME."));
 					fields[i].maxAutoRepeatDelay--;
 				}else if(option[i]==7 && fields[i].maxInterRepeatDelay > MIN_INTER_REPEAT_DELAY){
 					fields[i].maxInterRepeatDelay--;
-				}	
+				}
 			}
 			if((fields[i].currButtons&BTN_RIGHT)&&!(fields[i].lastButtons&BTN_RIGHT)){
-				if((option[i]==3 && songNo<3) && (uzenet_step < UN_STEP_PLAYING || i == uzenet_local_player)){
-					songNo++;
+				if(option[i]==3 && fields[i].songNo<3){
+					fields[i].songNo++;
+					if(uzenet_step < UN_STEP_PLAYING)
+						fields[!i].songNo = fields[i].songNo;
 				}else if(option[i]==4){
 					fields[i].noGhostBlock=!fields[i].noGhostBlock;
 				}else if(option[i]==5 && fields[i].startLevel<30){
@@ -358,12 +368,13 @@ Print(0,4,PSTR("P THE BOMB. MAKE YOUR TIME."));
 		for(u8 i=0;i<2;i++){
 			if(i == 1 && !vsMode)
 				continue;
-		Print(dx,18,PSTR("MUSIC:   "));
+
 			dx=i?FIELD_LEFT_P2+1:FIELD_LEFT_P1+1;
-			if(songNo == 3)
+			Print(dx,18,PSTR("MUSIC:   "));
+			if(fields[i].songNo == 3)
 				Print(dx+6,18,PSTR("NXT"));
-			else if(songNo)
-				PrintHexByte(dx+6,18,songNo);
+			else if(fields[i].songNo)
+				PrintHexByte(dx+6,18,fields[i].songNo);
 			else
 				Print(dx+6,18,PSTR("OFF"));
 
@@ -448,9 +459,9 @@ u16 c;
 			Print(4,18,PSTR("NETWORK ERROR OR MODULE FAILURE"));
 			Print(4,20,PSTR("CHECK INTERNET OR RUN SETUP TOOL"));
 			Print(4,22,PSTR("IF THIS PROBLEM PERSISTS"));
-		c = ReadJoypad(0);
+		c = Uzenet_ReadJoypad(0);
 		if(c & BTN_B){
-			while(ReadJoypad(0) != 0); //wait for key release
+			while(Uzenet_ReadJoypad(0) != 0); //wait for key release
 			TriggerFx(5,0xff,1);
 			FadeOut(1,1);
 			FadeIn(1,0);
@@ -463,10 +474,10 @@ u16 c;
 //+((anim3+1)>>3)%5
 //drawTetramino(pgm_read_byte(&sin_tablex[(anim2%sizeof(sin_tablex))]),pgm_read_byte(&sin_tabley[(anim2%sizeof(sin_tabley))]),0,anim1&3,0,0,0);
 //drawTetramino(pgm_read_byte(&sin_tablex[(anim1%sizeof(sin_tablex))]),pgm_read_byte(&sin_tabley[(anim3%sizeof(sin_tabley))]),1,anim2&3,0,0,0);
-drawTetramino(pgm_read_byte(&sin_tablex[(anim3%sizeof(sin_tablex))]),pgm_read_byte(&sin_tabley[(anim1%sizeof(sin_tabley))]),2,anim3&3,0,0,0);
+//drawTetramino(pgm_read_byte(&sin_tablex[(anim3%sizeof(sin_tablex))]),pgm_read_byte(&sin_tabley[(anim1%sizeof(sin_tabley))]),2,anim3&3,0,0,0);
 //drawTetramino(pgm_read_byte(&sin_tablex[(anim2%sizeof(sin_tablex))]),pgm_read_byte(&sin_tabley[(anim3%sizeof(sin_tabley))]),3,anim1&3,0,0,0);
 //drawTetramino(pgm_read_byte(&sin_tablex[(anim1%sizeof(sin_tablex))]),pgm_read_byte(&sin_tabley[(anim2%sizeof(sin_tabley))]),4,anim2&3,0,0,0);
-drawTetramino(pgm_read_byte(&sin_tablex[(anim3%sizeof(sin_tablex))]),pgm_read_byte(&sin_tabley[(anim3%sizeof(sin_tabley))]),5,anim3&3,0,0,0);
+//drawTetramino(pgm_read_byte(&sin_tablex[(anim3%sizeof(sin_tablex))]),pgm_read_byte(&sin_tabley[(anim3%sizeof(sin_tabley))]),5,anim3&3,0,0,0);
 
 
 //		if(c & BTN_A)
@@ -494,7 +505,7 @@ drawTetramino(pgm_read_byte(&sin_tablex[(anim3%sizeof(sin_tablex))]),pgm_read_by
 	}
 
 	TriggerFx(25,0xff,1); //alert the players
-	StartSongNo(songNo);
+	TriggerMusic();
 
 	u8 ready1 = 0;
 	u8 ready2 = 0;
@@ -506,45 +517,14 @@ drawTetramino(pgm_read_byte(&sin_tablex[(anim3%sizeof(sin_tablex))]),pgm_read_by
 //	char *pname = fields[0].surface;
 //	UartSendChar(UN_COMMAND_UPPERCASE);//send only uppercase strings
 //	UartSendChar(UN_GET_PLAYER_NAME1);
-	DrawMap(0,0,map_main);
-	drawPlayerNames();
+DrawMap(0,0,map_main);
+drawPlayerNames();
+OptionsMenu();
+/*
 	while(1){//wait for each player to be ready(there might have been a long wait before finding an opponent...)
-		WaitVsync(2);
+		WaitVsync(1);
 
-		u16 c1 = ReadJoypad(0);
-		u16 c2 = ReadJoypad(1);
-		Print(15,19,PSTR("PRESS B TO"));
-		Print(15,20,PSTR("DISCONNECT"));
 
-		if(c1 & BTN_B){
-			while(ReadJoypad(0) != 0); //wait for key release
-			TriggerFx(5,0xff,1);
-			FadeOut(1,1);
-			FadeIn(1,0);
-			return 0;//go back to main menu
-		}
-
-	/*	if(!got1){//still need player 1 name?
-			s16 c = UartReadChar();
-			if(c != -1){
-				c &= 0xff;
-				
-			}
-		}
-		if(fields[0].surface[0] && !requested2){//already drew player 1 name, but not player 2 name?
-			requested2 = 1;//don't request again
-			UartSendChar(UN_GET_PLAYER_NAME2);//get name of second player from the server...
-		}
-*/
-		if(!vram[(VRAM_TILES_H*19)+9] || !vram[(VRAM_TILES_H*21)+9]){ //didn't get player names yet? wait until we do, so we can copy it to the game field
-			Print(9,18,PSTR("RETRIEVING DATA...."));
-
-			continue;
-		}
-
-	//	Print(9,16,PSTR("PRESS START"));		
-	//	if((timer&63) > 31)
-	//		Print(9,16,PSTR("           "));
 		if(!ready1 && (c1 & BTN_START)){
 			TriggerFx(25,0xff,1);
 			ready1 = 1;
@@ -554,6 +534,7 @@ drawTetramino(pgm_read_byte(&sin_tablex[(anim3%sizeof(sin_tablex))]),pgm_read_by
 			ready2 = 1;
 		}
 		
+		OptionsMenu();
 if(ready1)
 	ready2 = 1;
 		if(ready1)
@@ -568,6 +549,7 @@ if(ready1)
 			break;
 
 	}
+*/
 	return 1;
 }
 
@@ -589,7 +571,10 @@ u8 MainMenu(){
 		Print(15,17,PSTR("[2]VERSUS"));
 		Print(15,18,PSTR("[3]UZENET"));
 
-		Print(11,21,PSTR("KEYBOARD SUPPORTED"));
+		//Print(11,21,PSTR("KEYBOARD SUPPORTED"));
+		if(IsRunningInEmulator()){
+			Print(8,21,PSTR("CTRL+F1 TO TOGGLE KB/JP"));
+		}
 		Print(11,23,PSTR("\\2008 ALEC BOURQUE"));
 		Print(7,24,PSTR("LICENSED UNDER GNU GPL V3"));
 		Print(9,25,PSTR("HTTPS://WWW.UZEBOX.ORG"));
@@ -1030,15 +1015,11 @@ void hold(u8 p){
 		s8 fleft=p?FIELD_LEFT_P2:FIELD_LEFT_P1;
 		updateGhostPiece(p,1);
 		drawTetramino(fields[p].currBlockX+fleft,fields[p].currBlockY+FIELD_TOP,fields[p].currBlock,fields[p].currBlockRotation,0,1,1);
+		restore(p?HOLD_X_P2:HOLD_X_P1,B2B_Y,6,3);
 
-		s8 hx=p?HOLD_X_P2:HOLD_X_P1;
 		if(fields[p].holdBlock==NO_BLOCK){
 
 			fields[p].holdBlock=fields[p].currBlock;
-
-			//update the hold block
-			drawTetramino(hx,HOLD_Y,fields[p].holdBlock,0,0,0,0);
-
 			issueNewBlock(p);
 			updateGhostPiece(p,0);	
 		}else{
@@ -1064,6 +1045,8 @@ void hold(u8 p){
 
 		fields[p].canHold=0;
 	}
+
+	drawTetramino(p?HOLD_X_P2:HOLD_X_P1,HOLD_Y,fields[p].holdBlock,0,0,0,0);
 }
 
 
@@ -1460,7 +1443,10 @@ u8 updateField(u8 p){
 
 			//update score, lines, etc
 			if(clearCount!=0){
-				fields[p].lines+=clearCount;
+				if(fields[p].lines < 255-clearCount)
+					fields[p].lines+=clearCount;
+				else
+					fields[p].lines = 255;
 				u16 bonus;
 				if(clearCount==1){
 					bonus=100;
@@ -1483,8 +1469,8 @@ u8 updateField(u8 p){
 
 				fields[p].score+=(fields[p].level*1)*bonus;
 
-				if(fields[p].score>999999)
-					fields[p].score=999999;
+				if(fields[p].score>999990000UL)
+					fields[p].score=999990000UL;
 			}		
 
 			if(fields[p].lines > fields[p].nextLevel){
@@ -1630,6 +1616,7 @@ void doGameOver(u8 p){
 			anim=22;
 
 		for(u8 i=0;i<2;i++){
+
 			if(i == 1 && !vsMode)
 				break;
 			s8 fleft=i?FIELD_LEFT_P2:FIELD_LEFT_P1;
@@ -1644,7 +1631,7 @@ void doGameOver(u8 p){
 			PrintInt(fleft+9,25,(fields[i].score)&0xFFFF,1);
 			PrintInt(fleft+4,25,((fields[i].score)>>16)&0xFFFF,1);
 			fields[i].lastButtons=fields[i].currButtons;
-			fields[i].currButtons=ReadJoypad(i);
+			fields[i].currButtons=Uzenet_ReadJoypad(i);
 
 			if((fields[i].currButtons&(BTN_START) && !(fields[i].lastButtons&(BTN_START)))){	
 				fields[0].lastButtons |= BTN_START;
@@ -1656,8 +1643,8 @@ void doGameOver(u8 p){
 		if(vsMode){
 			//Fill(fleft2,FIELD_TOP+10,FIELD_WIDTH,3,22+a);
 			Print(fleft,FIELD_TOP+9,strYouLose);
-Print(0,0,PSTR("1>GG!"));
-Print(0,3,PSTR("2>HAAAXX!!"));
+//Print(0,0,PSTR("1>MUAHAHA I ALMOST HAD YOU THAT TIME!!"));
+//Print(0,3,PSTR("2>..."));
 		Fill(fleft2,FIELD_TOP+8,FIELD_WIDTH,3,anim);
 			Print(fleft2+1,FIELD_TOP+9,strYouWin);
 			a+=y;
@@ -1771,6 +1758,12 @@ u8 processGarbage(u8 p){
 
 
 void drawPlayerNames(){
+
+//Print(FIELD_LEFT_P1,FIELD_TOP+1,PSTR("D3THADD3R"));
+//Print(FIELD_LEFT_P2,FIELD_TOP+1,PSTR("UZE6666"));
+//return;
+
+
 	if(!(uzenet_state & UN_STATE_GOT_NAMES) || uzenet_error)
 		return;
 	SpiRamSeqReadStart(0,UN_PLAYER_INFO_BASE);

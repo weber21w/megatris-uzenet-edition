@@ -25,7 +25,7 @@ extern void Uzenet_CustomMatchHandler();
 extern const char UN_FONT_SPECIFICATION_TABLE[];
 #endif
 
-#define UN_HARDCODED_SERVER	1
+//#define UN_HARDCODED_SERVER	1
 #ifdef UN_HARDCODED_SERVER
 const char UN_HARDCODED_SERVER_NAME[] PROGMEM = "10.0.99.158";
 #endif
@@ -123,8 +123,12 @@ const char UN_STR_ERROR[] PROGMEM = "ERROR";
 #define UN_DETECTED_RSVP	256
 #define UN_STATE_GOT_NAMES	512
 
-#define UN_DO_SYNC		1024
+#define UN_STATE_DO_SYNC		1024
 #define UN_STATE_PLAYING	2048
+#define UN_STATE_QUIT_GAME	4096
+#define UN_STATE_TRANSPARENT	8192
+#define UN_STATE_TX_BREAK	16384
+#define UN_STATE_	32768
 
 
 #define UN_ERROR_TRANSIENT		1//a(possibly) temporary error, which might have been caused by temporary network conditions
@@ -138,15 +142,16 @@ const char UN_STR_ERROR[] PROGMEM = "ERROR";
 #define UN_MATCH_WAS_KICKED	8//we got kicked from the room somehow?
 
 
-
 #define UN_PASS_EEPROM_OFF	23//8 characters long
 #define UN_HOST_EEPROM_OFF	11//up to 8 characters long, used as a suffix to "uze", so a value of "net.us" implies the hostname "uzenet.us"(was the old/unused MAC attribute).
 #define UN_SPIR_BASE		512
 #define UN_SPIR_BASE_TX	UN_SPIR_BASE+0
-#define UN_SPIR_BASE_RX	UN_SPIR_BASE_TX+128
-#define UN_PASS_BASE		UN_SPIR_BASE_RX+512
-#define UN_HOST_BASE		UN_PASS_BASE+16
-#define UN_PLAYER_INFO_BASE	4096
+#define UN_SPIR_BASE_RX	UN_SPIR_BASE_TX+1024
+#define UN_PASS_BASE		UN_SPIR_BASE_RX+1024
+#define UN_SPIR_HOST_BASE	UN_PASS_BASE+16
+#define UN_PLAYER_INFO_BASE	UN_SPIR_HOST_BASE+64
+#define UN_PAD_HISTORY_BASE	UN_PLAYER_INFO_BASE+(13*4)//512 per player(256 pad states each)
+
 
 #define UN_STEP_RESET		0
 #define UN_STEP_START		1
@@ -168,10 +173,11 @@ const char UN_STR_ERROR[] PROGMEM = "ERROR";
 #define UN_STEP_IN_MATCH	17
 #define UN_STEP_CHECK_READY	18
 #define UN_STEP_PLAYER_INFO	19
-
+#define UN_STEP_QUIT_GAME	40
 //custom override states, to allow user implementations of RSVP and matchmaking handling
 #define UN_STEP_CUSTOM_RSVP	101
 #define UN_STEP_CUSTOM_MATCH	151
+
 
 #define UN_STEP_PLAYING	240
 
@@ -219,6 +225,13 @@ const char UN_STR_ERROR[] PROGMEM = "ERROR";
 #define UN_CMD_SEND_MATCH_READY	39
 #define UN_CMD_PLAYER_INFO_SIMPLE	40
 
+#define UN_CMD_DO_SYNC			45
+
+#define UN_CMD_BAD_SYNC		49
+#define UN_CMD_QUIT_MATCH		50
+
+#define UN_CMD_CHAT_BYTE		55
+
 #define UN_CMD_PAD_DATA_SIMPLE	60
 //TODO NEED TO SUPPORT NEW BAUD FORMAT IN EMULATOR BEFORE DOING THIS
 //#define UN_CUSTOM_BAUD_DIVISOR	30
@@ -227,10 +240,8 @@ const char UN_STR_ERROR[] PROGMEM = "ERROR";
 
 //#define UN_MATCH_MAKING_STYLE	1//override the default simple "join/host any game without password" behavior
 
-
 #define UN_KBD_ROLE_GET_ASCII		0
 #define UN_KBD_ROLE_EMULATE_PAD	1
-
 
 
 #define UN_MAX_RUN_AHEAD	120
@@ -243,7 +254,7 @@ volatile u16 uzenet_state;
 volatile u8 uzenet_sync;
 volatile u8 uzenet_error;
 volatile u8 uzenet_step,uzenet_wait,uzenet_local_tick;
-volatile u8 uzenet_remote_tick;//[MAX_UZENET_PLAYERS];
+volatile u8 uzenet_remote_player,uzenet_remote_tick,uzenet_remote_cmd,uzenet_remote_last_rx_tick;//[MAX_UZENET_PLAYERS];
 volatile u8 uzenet_local_player;
 volatile u16 uzenet_spir_rx_pos, uzenet_spir_tx_pos;
 volatile u16 uzenet_spir_rx_len;
@@ -262,6 +273,7 @@ void Uzenet_SpiRamTxS(char *s){
 	SpiRamSeqWriteEnd();
 }
 
+
 void Uzenet_SpiRamTxP(const char *s){
 	SpiRamSeqWriteStart(0, (u16)(uzenet_spir_tx_pos+uzenet_spir_tx_len));
 	char c;
@@ -271,6 +283,7 @@ void Uzenet_SpiRamTxP(const char *s){
 	}
 	SpiRamSeqWriteEnd();
 }
+
 
 void Uzenet_SpiRamTxB(u8 d){
 	SpiRamWriteU8(0, (u16)(uzenet_spir_tx_pos+uzenet_spir_tx_len), d);
@@ -293,6 +306,7 @@ s16 Uzenet_SpiRamRxB(){//returns the earliest unread byte, control positioning w
 		uzenet_spir_rx_pos = 0;
 	return b;
 }
+
 
 void DEBUGRXBUF(){
 	u8 x = 3;
@@ -318,6 +332,7 @@ void Uzenet_SetStep(u8 s){
 	uzenet_step = s;
 }
 
+
 u8 Uzenet_Sync(u8 s){
 //	uzenet_sync = s;
 	if(uzenet_state < UN_STEP_PLAYING)
@@ -332,15 +347,18 @@ u8 Uzenet_Sync(u8 s){
 	return (wait_time < UN_MAX_SYNC_WAIT);
 }
 
+
 u8 Uzenet_GameError(){
 	if(uzenet_step >= UN_STEP_PLAYING)
 		return uzenet_error;
 	return 0;
 }
 
+
 void Uzenet_FindOpponent(){
 	uzenet_state |= UN_FIND_OPPONENT;
 }
+
 
 int Uzenet_SpiRamRxSearchP(const char *s){
 	u16 spos = (u16)(uzenet_spir_rx_pos+0);
@@ -362,6 +380,7 @@ int Uzenet_SpiRamRxSearchP(const char *s){
 	return 0;
 }
 
+
 void Uzenet_SpiRamRxFlush(u8 iu){
 	uzenet_spir_rx_pos = UN_SPIR_BASE_RX;
 	uzenet_spir_rx_len = 0;
@@ -372,6 +391,7 @@ void Uzenet_SpiRamRxFlush(u8 iu){
 		InitUartRxBuffer();
 }
 
+
 void Uzenet_SpiRamTxFlush(u8 iu){//don't call this until you are done transmitting!
 	uzenet_spir_tx_pos = UN_SPIR_BASE_TX;
 	uzenet_spir_tx_len = 0;
@@ -379,9 +399,21 @@ void Uzenet_SpiRamTxFlush(u8 iu){//don't call this until you are done transmitti
 		InitUartTxBuffer();
 }
 
-u16 Uzenet_ReadJoypad(u8 p){
 
+u16 Uzenet_ReadJoypad(u8 p){
+	if(uzenet_step < UN_STEP_PLAYER_INFO)//normal local play
+		return ReadJoypad(p);
+
+	if(p == uzenet_local_player){
+		//TODO see if we should stall with 0xFFFF
+		return ReadJoypad(0);//first joypad, regardless of which player we actually are in game
+	}
+	//otherwise remote player, get data for their current tick(which might be 0xFFFF)
+	u16 off = UN_PAD_HISTORY_BASE+((uzenet_remote_player*2*256)+(uzenet_remote_tick*2));
+	u16 pad = SpiRamReadU16(0, off);//if this data wasn't filled by network data, it will be 0xFFFF
 }
+
+
 int total_sent = 0;
 void Uzenet_Update(){//designed to work with a *MINIMUM* 16 bytes Rx, and 2 byte Tx at 9600 baud. Faster speeds will need a larger Rx buffer for reliability, Tx can remain low
 
@@ -416,7 +448,7 @@ SpiRamSeqWriteU8(uzenet_last_rx);			//SpiRamSeqWriteU8(UartReadChar());
 		SpiRamSeqReadEnd();
 	}
 
-	//if(uzenet_step < UN_STEP_PLAYING)
+	if(uzenet_step < UN_STEP_PLAYER_INFO)//not commited to a match yet? then process local input so the user can quit the menu
 		ReadControllers();
 
 	if(uzenet_error & UN_ERROR_CRITICAL){
@@ -428,9 +460,68 @@ SpiRamSeqWriteU8(uzenet_last_rx);			//SpiRamSeqWriteU8(UartReadChar());
 	uzenet_local_tick++;//always increment timer, used for multiple things
 
 	if(uzenet_step >= UN_STEP_PLAYING){//intercepting joypad input to perform networking transparently
-
 		
-//		if(uzenet_state & UN_DO_SYNC){
+		while(uzenet_spir_rx_len){//have some bytes to process?
+			if(uzenet_remote_cmd == 0){
+				uzenet_remote_cmd = Uzenet_SpiRamRxB();
+			}
+
+			if(uzenet_remote_cmd == UN_CMD_PAD_DATA_SIMPLE){
+
+				if(uzenet_spir_rx_len < 4)
+					break;
+				SpiRamSeqReadStart(0, uzenet_spir_rx_pos);
+				u8 padnum = SpiRamSeqReadU8();
+				u8 ticknum = SpiRamSeqReadU8();
+				u8 padhi = SpiRamSeqReadU8();
+				u8 padlo = SpiRamSeqReadU8();
+				SpiRamSeqReadEnd();
+				uzenet_spir_rx_pos += 4;
+
+				if(padnum == uzenet_remote_player && (uzenet_remote_last_rx_tick+1) == ticknum){
+					uzenet_remote_last_rx_tick++;
+					u16 off = UN_PAD_HISTORY_BASE+(uzenet_remote_player*2*256)+(uzenet_remote_tick*2);
+					SpiRamSeqWriteStart(0, off);
+					SpiRamSeqWriteU16((u16)((padhi<<8)|padlo));//write new data
+					SpiRamSeqWriteU16(0xFFFF);//mark the data as unavailable when the counter wraps, unless we fill it before then
+					SpiRamSeqWriteEnd();
+
+				}else{//shouldn't happen, must be out of sync
+					Uzenet_SpiRamTxB(UN_CMD_BAD_SYNC);
+					Uzenet_SpiRamTxB(UN_CMD_QUIT_MATCH);
+					uzenet_error |= UN_ERROR_GAME_FAILED;
+					//uzenet_step = UN_STEP_
+				}
+					//Uzenet_SpiRamRxB();//log remote input(2 bytes)
+
+			}else if(uzenet_remote_cmd == UN_CMD_DO_SYNC){//other side wants us to send up to(and including) a specific tick...
+
+				if(uzenet_spir_rx_len < 1)//don't have the tick number yet....
+					break;
+	//			u8 sync_tick = SpiRamReadU8();//we assume this is within 180 ticks ago, since otherwise things already broke...
+
+	/*			if(sync_tick < uzenet_local_tick){
+					u8 delta = uzenet_local_tick-sync_tick;
+					if(delta > 180){//being asked to sync to a point we already went past?
+						//TODO send our own sync signal, we can't go back, they shouldn't have went forward either...reconcile
+					}
+				}
+*/
+			}else if(uzenet_remote_cmd == UN_CMD_QUIT_MATCH){//other side leaving, we leave too
+
+				Uzenet_SpiRamTxB(UN_CMD_QUIT_MATCH);
+				uzenet_error |= UN_ERROR_GAME_FAILED;
+				//uzenet_step = UN_STEP_
+
+			}else if(uzenet_remote_cmd == UN_CMD_CHAT_BYTE){
+
+				if(uzenet_spir_rx_len < 1)
+					break;
+				
+
+			}
+		}
+//		if(uzenet_state & UN_STATE_DO_SYNC){
 //			while(!GetVsyncFlag());
 //			return;
 //		}
@@ -709,7 +800,7 @@ uzenet_wait = 5;
 				uzenet_remote_tick = 0;//reset our temp timer
 				uzenet_local_tick = 0;//reset our temp counter
 				uzenet_step = UN_STEP_PLAYING;
-				uzenet_state |= (UN_STATE_GOT_NAMES|UN_DO_SYNC|UN_STATE_PLAYING);
+				uzenet_state |= (UN_STATE_GOT_NAMES|UN_STATE_DO_SYNC|UN_STATE_PLAYING);
 				uzenet_sync = 1;//each player will send an initial state to get rolling...
 			//	Uzenet_SpiRamTxB(UN_CMD_PAD_DATA_SIMPLE);//tell the server we are sending game data(we didn't read pads this tick, neither did they)
 			//	Uzenet_SpiRamTxP(PSTR("\x00\x00\x00"));//tick 0(default 2 bytes format) empty pad state(they will send the same to get us out of the first sync)
@@ -736,7 +827,30 @@ uzenet_wait = 5;
 		}
 
 
-	}//else if(uzenet_step == UN_STEP_DO_SYNC){//wait until we have received remote input up to a certain point
+	}/*else if(uzenet_step == UN_STEP_QUIT_GAME){
+
+		uzenet_step = UN_STEP_TX_BREAK;
+		uzenet_remote_tick = 0;//set a timer, we need to wait a bit to make sure we are in a new transparent mode timing window to send '+++'
+
+	}else if(uzenet_step == UN_STEP_TX_BREAK){
+
+		if(!uzenet_remote_tick)
+			uzenet_remote_tick = 1;
+		else{
+			Uzenet_SpiRamTxP(PSTR("+++"));
+			uzenet_step = UN_STEP_DISCONNECT;
+		}
+
+	}else if(uzenet_step == UN_STEP_DISCONNECT_SERVER){
+
+		if(!uzenet_remote_tick)
+			uzenet_remote_tick = 1;
+		else{
+			Uzenet_SpiRamTxP("AT+CIPCLOSE\r\n");
+			uzenet_step = UN_STEP_PRE_CONNECT;
+		}
+
+	}*/
 
 
 		
@@ -771,9 +885,7 @@ u8 GetScanCode(u8 command){
 
 	unsigned char i;
 
-	if(state==0){
-
-		//ready to transmit condition
+	if(state==0){//ready to transmit condition
 		JOYPAD_OUT_PORT&=~(_BV(JOYPAD_CLOCK_PIN));
 		JOYPAD_OUT_PORT|=_BV(JOYPAD_LATCH_PIN);
 		Wait200ns();
@@ -789,24 +901,23 @@ u8 GetScanCode(u8 command){
 		Wait200ns();
 		Wait200ns();
 
-		if(command==KB_SEND_END){
+		if(command==KB_SEND_END)
 			state=0;
-		}else{
+		else
 			state=1;
-		}
+		
 	}
 
 	//read button states
 	for(i=0;i<8;i++){
 
 		data<<=1;
-
 		//data out
-		if(command&0x80){
+		if(command&0x80)
 			JOYPAD_OUT_PORT|=_BV(JOYPAD_LATCH_PIN);
-		}else{
+		else
 			JOYPAD_OUT_PORT&=~(_BV(JOYPAD_LATCH_PIN));
-		}
+		
 
 		//pulse clock pin
 		JOYPAD_OUT_PORT&=~(_BV(JOYPAD_CLOCK_PIN));
